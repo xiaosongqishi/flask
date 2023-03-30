@@ -244,7 +244,7 @@ from app import routes, models
 
 让我们首先创建一个代表用户的模型。使用[WWW SQL Designer](https://ondras.zarovi.cz/sql/demo/)工具，我做了下面的图来表示我们想在用户表中使用的数据：
 
-![data](/assets/img/data.jpg "data")
+![data](/assets/img/data.png "data")
 
 `id`字段通常在所有模型中都有，并被用作主键。数据库中的每个用户将被分配一个唯一的id值，存储在这个字段中。在大多数情况下，主键是由数据库自动分配的，所以我只需要提供标记为主键的`id`字段。
 
@@ -354,6 +354,7 @@ INFO  [alembic.runtime.migration] Running upgrade  -> e517276bb1c2, users table
 让我们扩展数据库来存储博客文章，看看关系的作用。下面是一个新的帖子表的模式：
 
 ![ch04-users-posts](/assets/img/ch04-users-posts.png "ch04-users-posts")
+
 
 `posts`表将有必要的`id`、帖子的`body`和`timestamp`。但除了这些预期的字段外，我还要添加一个`user_id`字段，它将帖子与作者联系起来。你已经看到，所有的用户都有一个id主键，它是唯一的。将一篇博文与撰写博文的用户联系起来的方法是添加一个对用户`id`的引用，而这正是`user_id`字段的作用。这个`user_id`字段被称为外键(_foreign key_)。上面的数据库图显示外键是该字段和它所指向的表的`id`字段之间的联系。这种关系被称为一对多(_one-to-many_)，因为 "一个 "用户写了 "许多 "帖子。
 
@@ -579,3 +580,429 @@ def make_shell_context():
 ```
 
 如果你尝试上述方法，并在试图访问`db`、`User`和`Post`时得到`NameError`异常，那么`make_shell_context()`函数就没有被Flask注册。最有可能的原因是，你没有在环境中设置F`LASK_APP=microblog.py`。在这种情况下，请回到第1章，回顾一下如何设置`FLASK_APP`环境变量。如果你在打开新的终端窗口时经常忘记设置这个变量，你可以考虑在你的项目中添加一个 _.flaskenv_ 文件，如该章末尾所述。
+
+# Chapter 5:User Logins
+
+## Password Hashing
+
+在第4章中，用户模型添加了一个`password_hash`字段，到目前为止尚未使用。此字段的目的是保存用户密码的哈希值，将用于验证用户在登录过程中输入的密码。密码哈希是一个复杂的主题，应该留给安全专家，但有几个易于使用的库实现了所有这些逻辑，可以从应用程序中简单地调用。
+
+其中一个实现密码哈希的包是Werkzeug，你可能已经在安装Flask时看到它的输出中引用了它，因为它是Flask的核心依赖项之一。由于它是一个依赖项，[Werkzeug](http://werkzeug.pocoo.org/)已经安装在您的虚拟环境中。下面的Python shell会话演示了如何哈希密码:
+
+```Shell
+>>> from werkzeug.security import generate_password_hash
+>>> hash = generate_password_hash('foobar')
+>>> hash
+'pbkdf2:sha256:50000$vT9fkZM8$04dfa35c6476acf7e788a1b5b3c35e217c78dc04539d295f011f01f18cd2'
+```
+
+在这个例子中，密码"`foobar`"被通过一系列的加密操作转化成一个长字符串，这些操作没有已知的反向操作，这意味着获得散列密码的人将无法使用它来获取原始密码。为了进一步保护，如果你多次哈希相同的密码，你会得到不同的结果，这使得通过查看哈希值来确定两个用户是否具有相同的密码变得不可能。
+
+验证过程使用 Werkzeug 的第二个函数，如下所示：
+
+```Shell
+>>> from werkzeug.security import check_password_hash
+>>> check_password_hash(hash, 'foobar')
+True
+>>> check_password_hash(hash, 'barfoo')
+False
+```
+
+验证函数接受之前生成的密码哈希和用户在登录时输入的密码。如果用户提供的密码与哈希相匹配，则该函数返回`True`，否则返回`False`。
+
+整个密码哈希逻辑可以在用户模型中实现为两个新方法：
+
+app/models.py: Password hashing and verification
+
+```python
+from werkzeug.security import generate_password_hash, check_password_hash
+
+# ...
+
+class User(db.Model):
+    # ...
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+```
+
+有了这两个方法，用户对象现在可以进行安全的密码验证，而无需存储原始密码。以下是这些新方法的示例用法：
+
+```Shell
+>>> u = User(username='susan', email='susan@example.com')
+>>> u.set_password('mypassword')
+>>> u.check_password('anotherpassword')
+False
+>>> u.check_password('mypassword')
+True
+```
+
+## Introduction to Flask-Login
+
+在本章中，我将向您介绍一个非常受欢迎的Flask扩展，称为[Flask-Login](https://flask-login.readthedocs.io/)。该扩展管理用户的登录状态，例如，用户可以登录到应用程序，然后在应用程序记住用户已登录的情况下导航到不同的页面。它还提供了“记住我”功能，允许用户在关闭浏览器窗口后仍然保持登录状态。为了准备开始本章，您可以在虚拟环境中安装Flask-Login：
+
+```Shell
+(venv) $ pip install flask-login
+```
+和其他扩展一样，Flask-Login需要在 _app/\_\_init\_\_.py_ 中的应用实例之后创建和初始化。以下是初始化该扩展的代码示例：
+
+app/\_\_init\_\_.py: Flask-Login initialization
+
+```python
+# ...
+from flask_login import LoginManager
+
+app = Flask(__name__)
+# ...
+login = LoginManager(app)
+
+# ...
+```
+
+## Preparing The User Model for Flask-Login
+
+Flask-Login扩展与应用程序的用户模型一起工作，并期望在其中实现某些属性和方法。这种方法很好，因为只要将这些所需的项添加到模型中，Flask-Login就没有任何其他要求，因此，例如，它可以使用基于任何数据库系统的用户模型。
+
+下面列出了四个必需的项：
+
+* `is_authenticated`：如果用户具有有效凭据，则为`True`，否则为`False`的属性。
+* `is_active`：如果用户的帐户处于活动状态，则为`True`，否则为`False`的属性。
+* `is_anonymous`：常规用户为`False`，而特殊的匿名用户为`True`的属性。
+* `get_id()`：返回用户的唯一标识符作为字符串（如果使用Python 2，则为unicode）的方法。
+
+我可以很容易地实现这四个方法，但由于这些实现是相当通用的，Flask-Login提供了一个称为`UserMixin`的mixin类，其中包括适用于大多数用户模型类的通用实现。以下是将mixin类添加到模型的方式：
+
+app/models.py: Flask-Login user mixin class
+```python
+
+# ...
+from flask_login import UserMixin
+
+class User(UserMixin, db.Model):
+    # ...
+```
+
+## User Loader Function
+
+Flask-Login通过将用户的唯一标识符存储在Flask的用户会话(user session)中来跟踪已登录的用户，这是为每个连接到应用程序的用户分配的存储空间。每当已登录的用户导航到新页面时，Flask-Login会从会话中检索用户的ID，然后将该用户加载到内存中。
+
+由于Flask-Login对数据库一无所知，它需要应用程序的帮助来加载用户。因此，该扩展期望应用程序将配置一个用户加载函数，该函数可以根据ID调用以加载用户。可以将此函数添加到 _app/models.py_ 模块中：
+
+_app/models.py_: Flask-Login user loader function
+
+```python
+from app import login
+# ...
+
+@login.user_loader
+def load_user(id):
+    return User.query.get(int(id)
+```
+
+用户加载器使用`@login.user_loader`装饰器在Flask-Login中进行注册。Flask-Login传递给函数的`id`将作为参数成为字符串，因此使用数字ID的数据库需要像上面一样将字符串转换为整数。
+
+## Logging Users In
+
+让我们回顾一下登录视图函数，你可能还记得，它实现了一个虚假的登录功能，只是发出一个 `flash()` 消息。现在应用程序可以访问用户数据库并知道如何生成和验证密码哈希值，因此可以完成此视图函数的编写。
+
+_app/routes.py_: Login view function logic
+
+```python
+# ...
+from flask_login import current_user, login_user
+from app.models import User
+
+# ...
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if user is None or not user.check_password(form.password.data):
+            flash('Invalid username or password')
+            return redirect(url_for('login'))
+        login_user(user, remember=form.remember_me.data)
+        return redirect(url_for('index'))
+    return render_template('login.html', title='Sign In', form=form)
+```
+
+`login()` 函数中的前两行处理了一种奇怪的情况。想象一下，如果用户已经登录并导航到应用程序的 _/login_ URL，那么这显然是个错误，我不想允许这种情况。`current_user` 变量来自 Flask-Login，可以在处理期间随时使用它获取代表请求客户端的用户对象。此变量的值可以是来自数据库的用户对象（Flask-Login 通过我提供的用户加载器回调函数来读取它），也可以是特殊的匿名用户对象（如果用户尚未登录）。还记得 Flask-Login 在用户对象中所需的属性吗？其中之一是 `is_authenticated`，这在检查用户是否已登录时非常有用。当用户已经登录时，我只需要重定向到主页。
+
+我可以用之前使用的 `flash()` 调用来代替，现在我可以真正让用户登录。第一步是从数据库中加载用户。用户名是通过表单提交的，所以我可以使用该用户名查询数据库以查找用户。为此，我使用 SQLAlchemy 查询对象的 `filter_by()` 方法。`filter_by()` 的结果是一个仅包括具有匹配用户名的对象的查询。由于我知道只会有一个或零个结果，所以我通过调用 `first()` 完成查询，如果该用户对象存在，则返回该用户对象，否则返回 `None`。在第4章中，你已经看到当在查询中调用 `all()` 方法时，查询将执行并返回与该查询匹配的所有结果列表。`first()` 方法是另一种常用的执行查询的方式，当你只需要一个结果时就可以使用它。
+
+如果用户名匹配成功，我可以接下来检查表单中提供的密码是否有效。这是通过调用我上面定义的`check_password()`方法来完成的。这将使用与用户存储的密码哈希值来确定表单中输入的密码是否与哈希值匹配。因此，现在我有两种可能的错误情况：用户名无效或密码不正确。在任何一种情况下，我都会显示一条消息，并重定向回登录提示，以便用户可以再次尝试。
+
+如果用户名和密码都正确，那么我调用Flask-Login提供的`login_user()`函数。这个函数将把用户注册为已登录，这意味着用户导航到的任何未来页面都将使用`current_user`变量设置为该用户。
+
+为了完成登录过程，我只需将新登录的用户重定向到索引页面。
+
+## Logging Users Out
+
+我知道我还需要给用户提供退出应用程序的选项。这可以使用Flask-Login的logout_user()函数完成。下面是退出视图函数的代码：
+
+_app/routes.py_: Logout view function
+
+```python
+# ...
+from flask_login import logout_user
+
+# ...
+
+@app.route('/logout')
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+```
+
+为了向用户公开此链接，我可以在用户登录后使导航栏中的登录链接自动切换为注销链接。这可以在base.html模板中使用条件语句完成：
+
+_app/templates/base.html_: Conditional login and logout links
+
+```html
+<div>
+    Microblog:
+    <a href="{{ url_for('index') }}">Home</a>
+    {% if current_user.is_anonymous %}
+    <a href="{{ url_for('login') }}">Login</a>
+    {% else %}
+    <a href="{{ url_for('logout') }}">Logout</a>
+    {% endif %}
+</div>
+```
+
+`is_anonymous`属性是Flask-Login通过`UserMixin`类添加到用户对象中的属性之一。`current_user.is_anonymous`表达式只有在用户未登录时才为`True`。
+
+## Requiring Users To Login
+
+Flask-Login提供了一个非常有用的功能，可以在用户查看应用程序的某些页面之前强制他们先进行登录。如果未登录的用户尝试查看受保护的页面，Flask-Login将自动将用户重定向到登录表单，并在完成登录过程后才将其重定向回用户想要查看的页面。
+
+为了实现这个功能，Flask-Login需要知道处理登录的视图函数是什么。可以在 _app/\_\_init\_\_.py_ 中添加此功能：
+
+```python
+# ...
+login = LoginManager(app)
+login.login_view = 'login'
+```
+
+上面的 `'login'` 值是登录视图的函数名（或端点名）。换句话说，它是您在 `url_for()` 调用中使用的名称以获取 URL。
+
+Flask-Login使用名为`@login_required`的装饰器来保护视图函数免受匿名用户的访问。当你在一个使用了Flask的`@app.route`装饰器的视图函数下方添加了这个装饰器后，这个函数就变成了受保护的，不允许未经过身份验证的用户访问。以下是如何将装饰器应用于应用程序的index视图函数：
+
+_app/routes.py_: @login\_required decorator
+
+```python
+from flask_login import login_required
+
+@app.route('/')
+@app.route('/index')
+@login_required
+def index():
+    # ...
+```
+
+剩下的就是实现从成功登录到用户想要访问的页面的重定向。当一个没有登录的用户访问一个用`@login_required`装饰器保护的视图函数时，装饰器将重定向到登录页面，但它将在这个重定向中包含一些额外的信息，以便应用程序能够返回到第一个页面。例如，如果用户导航到 _/index_ ，`@login_required`装饰器将拦截该请求并响应重定向到 _/login_ ，但它将在这个URL上添加一个查询字符串参数，使完整的重定向URL _/login?next=/index_。`next`查询字符串参数被设置为原始的URL，所以应用程序可以在登录后使用它来重定向回来。
+
+下面是一个代码片段，显示了如何读取和处理`next`查询字符串参数：
+
+_app/routes.py_: Redirect to "next" page
+
+```python
+from flask import request
+from werkzeug.urls import url_parse
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    # ...
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if user is None or not user.check_password(form.password.data):
+            flash('Invalid username or password')
+            return redirect(url_for('login'))
+        login_user(user, remember=form.remember_me.data)
+        next_page = request.args.get('next')
+        if not next_page or url_parse(next_page).netloc != '':
+            next_page = url_for('index')
+        return redirect(next_page)
+    # ...
+```
+
+就在用户通过调用Flask-Login的`login_user()`函数登录后，获得了`next`查询字符串参数的值。Flask提供了一个`request`变量，包含了客户端随请求发送的所有信息。特别是，`request.args`属性以友好的字典格式展示了查询字符串的内容。实际上，有三种可能的情况需要考虑，以确定在成功登录后重定向到哪里：
+
+* 如果登录URL没有`next`参数，那么用户将被重定向到索引页。
+* 如果登录的URL包括一个被设置为相对路径的`next`参数（或者换句话说，一个没有域名部分的URL），那么用户将被重定向到该URL。
+* 如果登录的URL包括一个`next`参数，该参数被设置为一个包括域名的完整URL，那么用户将被重定向到索引页。
+
+第一和第二种情况是不言自明的。第三种情况是为了使应用程序更加安全。攻击者可以在下一个参数中插入一个恶意网站的URL，所以应用程序只在URL是相对的情况下重定向，这样可以确保重定向停留在与应用程序相同的网站内。为了确定URL是相对的还是绝对的，我用Werkzeug的`url_parse()`函数解析(parse)它，然后检查`netloc`组件是否被设置。
+
+## Showing The Logged In User in Templates
+
+你还记得在第二章中，在用户子系统建立之前，我创建了一个假用户来帮助我设计应用程序的主页吗？好了，现在应用程序有了真正的用户，所以我现在可以删除假用户，开始使用真正的用户。我可以在模板中使用Flask-Login的`current_user`，而不是假用户：
+
+_app/templates/index.html_: Pass current user to template
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>Hi, {{ current_user.username }}!</h1>
+    {% for post in posts %}
+    <div><p>{{ post.author.username }} says: <b>{{ post.body }}</b></p></div>
+    {% endfor %}
+{% endblock %}
+```
+而且我可以在视图函数中删除用户模板参数：
+_app/routes.py_: Do not pass user to template anymore
+
+```python
+@app.route('/')
+@app.route('/index')
+@login_required
+def index():
+    # ...
+    return render_template("index.html", title='Home Page', posts=posts)
+```
+
+这是一个测试登录和注销功能如何工作的好时机。由于仍然没有用户注册，向数据库添加用户的唯一方法是通过Python shell来完成，所以运行`flask shell`并输入以下命令来注册一个用户：
+
+```Shell
+>>> u = User(username='susan', email='susan@example.com')
+>>> u.set_password('cat')
+>>> db.session.add(u)
+>>> db.session.commit()
+```
+
+如果你启动应用程序并进入应用程序的/或/index URL，你将立即被重定向到登录页面，在你使用你添加到数据库的用户的凭证登录后，你将返回到原始页面，在其中你将看到一个个性化的问候语。
+
+## User Registration
+
+本章中我要建立的最后一个功能是一个注册表单，这样用户就可以通过一个web表单进行自我注册。让我们首先在 _app/forms.py_ 中创建Web表单类：
+
+_app/forms.py_: User registration form
+
+```python
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, BooleanField, SubmitField
+from wtforms.validators import ValidationError, DataRequired, Email, EqualTo
+from app.models import User
+
+# ...
+
+class RegistrationForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    password2 = PasswordField(
+        'Repeat Password', validators=[DataRequired(), EqualTo('password')])
+    submit = SubmitField('Register')
+
+    def validate_username(self, username):
+        user = User.query.filter_by(username=username.data).first()
+        if user is not None:
+            raise ValidationError('Please use a different username.')
+
+    def validate_email(self, email):
+        user = User.query.filter_by(email=email.data).first()
+        if user is not None:
+            raise ValidationError('Please use a different email address.')
+```
+
+在这个新的表单中，有几件有趣的事情与验证有关。首先，对于`email`字段，我在`DataRequired`之后添加了第二个验证器，叫做`Email`。这是另一个WTForms自带的验证器，它将确保用户在这个字段中输入的内容符合电子邮件地址的结构。
+
+WTForms的`Email()`验证器需要安装一个外部依赖：
+
+```Shell
+(venv) $ pip install email-validator
+```
+
+由于这是一个注册表格，习惯上要求用户输入两次密码以减少打错的风险。出于这个原因，我设置了`password`和`password2`字段。第二个密码字段使用另一个名为EqualTo的验证器，它将确保其值与第一个密码字段的值相同。
+
+当你添加任何与模式`validate_<field_name>`相匹配的方法时，WTForms将这些方法作为自定义验证器，并在原有验证器的基础上调用它们。我在这个类中为`username`和`email`字段添加了两个这样的方法。在这种情况下，我想确保用户输入的用户名和电子邮件地址不在数据库中，所以这两个方法发出数据库查询，期望没有结果。在有结果的情况下，通过引发一个`ValidationError`类型的异常来触发验证错误。异常中作为参数的信息将是显示在字段旁边供用户查看的信息。
+
+为了在网页上显示这个表单，我需要有一个HTML模板，我将把它存放在 _app/templates/register.html_ 文件中。这个模板的构造与登录表单的模板类似：
+
+_app/templates/register.html_: Registration template
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>Register</h1>
+    <form action="" method="post">
+        {{ form.hidden_tag() }}
+        <p>
+            {{ form.username.label }}<br>
+            {{ form.username(size=32) }}<br>
+            {% for error in form.username.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>
+            {{ form.email.label }}<br>
+            {{ form.email(size=64) }}<br>
+            {% for error in form.email.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>
+            {{ form.password.label }}<br>
+            {{ form.password(size=32) }}<br>
+            {% for error in form.password.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>
+            {{ form.password2.label }}<br>
+            {{ form.password2(size=32) }}<br>
+            {% for error in form.password2.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>{{ form.submit() }}</p>
+    </form>
+{% endblock %}
+```
+
+登录表格模板需要一个链接，将新用户发送到注册表格，就在表格的下面：
+
+_app/templates/login.html_: Link to registration page
+
+```html
+    <p>New User? <a href="{{ url_for('register') }}">Click to Register!</a></p>
+```
+
+最后，我需要在 _app/routes.py_ 中编写处理用户注册的视图函数：
+
+_app/routes.py_: User registration view function
+
+```python
+from app import db
+from app.forms import RegistrationForm
+
+# ...
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    form = RegistrationForm()
+    if form.validate_on_submit():
+        user = User(username=form.username.data, email=form.email.data)
+        user.set_password(form.password.data)
+        db.session.add(user)
+        db.session.commit()
+        flash('Congratulations, you are now a registered user!')
+        return redirect(url_for('login'))
+    return render_template('register.html', title='Register', form=form)
+```
+
+而这个视图功能也应该大部分是不言自明的。我首先要确保调用这个路径的用户没有登录。这个表单的处理方式与登录时的处理方式相同。在`if validate_on_submit()`条件中完成的逻辑是用提供的用户名、电子邮件和密码创建一个新的用户，将其写入数据库，然后重定向到登录提示，这样用户就可以登录了。
+
+![ch05-register-form](/assets/img/ch05-register-form.png"ch05-register-form")
+
+有了这些变化，用户应该能够在这个应用程序上创建账户，并登录和退出。请确保你尝试我在注册表单中添加的所有验证功能，以更好地了解它们的工作原理。我将在未来的一章中重新审视用户验证子系统，以增加额外的功能，如允许用户在忘记密码时重置密码。但现在，这已经足够了，可以继续构建应用程序的其他区域。
