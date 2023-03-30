@@ -9,6 +9,7 @@ command:
 ```Shell
 >flask run
 ```
+然后在浏览器打开:`127.0.0.1:5000`
 
 [Flask](https://flask.palletsprojects.com/en/2.2.x/)是一个Python Web应用程序框架，基于Werkzeug工具箱和Jinja2模板引擎开发。它被设计为简单而灵活的框架，适用于从小型项目到大型应用程序的各种需求。由于其轻量级和灵活性，Flask常被用于快速原型开发，以及小型应用程序和API的开发。
 
