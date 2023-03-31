@@ -1006,3 +1006,390 @@ def register():
 ![ch05-register-form](/assets/img/ch05-register-form.png"ch05-register-form")
 
 有了这些变化，用户应该能够在这个应用程序上创建账户，并登录和退出。请确保你尝试我在注册表单中添加的所有验证功能，以更好地了解它们的工作原理。我将在未来的一章中重新审视用户验证子系统，以增加额外的功能，如允许用户在忘记密码时重置密码。但现在，这已经足够了，可以继续构建应用程序的其他区域。
+
+# Chapter6:Profile Page and Avatars
+
+这一章将专门讨论在应用程序中添加用户资料页。用户简介页是一个展示用户信息的页面，通常是由用户自己输入的信息。我将向你展示如何为所有用户动态地生成简介页，然后我将添加一个小型的简介编辑器，用户可以用它来输入自己的信息。
+
+## User Profile Page
+
+为了创建一个用户配置文件页面，让我们在应用程序中添加一个 _/user/<username>_ 路由。
+
+_app/routes.py_: User profile view function
+
+```python
+@app.route('/user/<username>')
+@login_required
+def user(username):
+    user = User.query.filter_by(username=username).first_or_404()
+    posts = [
+        {'author': user, 'body': 'Test post #1'},
+        {'author': user, 'body': 'Test post #2'}
+    ]
+    return render_template('user.html', user=user, posts=posts
+```
+
+我用来声明这个视图函数的`@app.route`装饰器看起来与之前的有点不同。在这种情况下，我在其中有一个动态组件，它被表示为`<username>`URL组件，被`<`和`>`所包围。当路由有一个动态组件时，Flask会接受URL中那一部分的任何文本，并以实际文本为参数调用视图函数。例如，如果客户端浏览器请求URL `/user/susan`，视图函数将被调用，参数`username`设置为`'susan'`。这个视图函数只能被登录的用户访问，所以我加入了Flask-Login的`@login_required`装饰器。
+
+这个视图函数的实现是相当简单的。我首先尝试通过用户名的查询从数据库中加载用户。你以前已经看到，如果你想得到所有的结果，可以通过调用`all()`来执行数据库查询；如果你想得到第一个结果，可以调用`first()`；如果没有结果，可以调用`None`。在这个视图函数中，我使用了`first()`的一个变体，叫做`first_or_404()`，当有结果时，它的工作方式与`first()`完全一样，但在没有结果的情况下，会自动向客户端发送一个[404错误](https://en.wikipedia.org/wiki/HTTP_404)。以这种方式执行查询，我省去了检查查询是否返回用户的麻烦，因为当用户名在数据库中不存在时，该函数不会返回，而会产生一个404异常。
+
+如果数据库查询没有引发404错误，那就意味着找到了一个具有给定用户名的用户。接下来我为这个用户初始化一个假的帖子列表，最后渲染一个新的user.html模板，我把用户对象和帖子列表传给它。
+
+user.html模板如下所示：
+
+_app/templates/user.html_: User profile template
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>User: {{ user.username }}</h1>
+    <hr>
+    {% for post in posts %}
+    <p>
+    {{ post.author.username }} says: <b>{{ post.body }}</b>
+    </p>
+    {% endfor %}
+{% endblock %}
+```
+
+档案页现在已经完成了，但在网站的任何地方都没有它的链接。为了使用户更容易查看自己的资料，我打算在顶部的导航栏中添加一个链接：
+
+_app/templates/base.html_: User profile template
+
+```html
+    <div>
+      Microblog:
+      <a href="{{ url_for('index') }}">Home</a>
+      {% if current_user.is_anonymous %}
+      <a href="{{ url_for('login') }}">Login</a>
+      {% else %}
+      <a href="{{ url_for('user', username=current_user.username) }}">Profile</a>
+      <a href="{{ url_for('logout') }}">Logout</a>
+      {% endif %}
+    </div>
+```
+
+这里唯一有趣的变化是`url_for()`的调用，它被用来生成到个人资料页面的链接。由于用户资料查看函数需要一个动态参数，所以`url_for()`函数接收一个作为关键字参数的值。由于这是一个指向登录的用户配置文件的链接，我可以使用Flask-Login的`current_user`来生成正确的URL。
+
+![ch06-user-profile](/assets/img/ch06-user-profile.png "ch06-user-profile")
+
+
+现在就试一试这个应用程序。点击顶部的个人资料链接，你就可以进入你自己的用户页面。在这一点上，没有链接可以进入其他用户的资料页面，但如果你想访问这些页面，你可以在浏览器的地址栏中手动输入URL。例如，如果你有一个名为 "john "的用户在你的应用程序上注册，你可以通过在地址栏中输入 _http://localhost:5000/user/john_，查看相应的用户资料。
+
+## Avatars
+
+我相信你也同意，我刚刚建立的个人资料页面是非常无聊的。为了使它们更有趣，我打算增加用户的头像，但不是在服务器中处理可能有大量的上传图片，而是使用[Gravatar](http://gravatar.com/)服务来为所有用户提供图片。
+
+Gravatar服务使用起来非常简单。要为一个给定的用户请求图像，需要一个格式为     _https://www.gravatar.com/avatar/<hash>_ 的URL，其中`<hash>`是用户的电子邮件地址的MD5哈希值。下面你可以看到如何获得一个用户的Gravatar URL，电子邮件为`john@example.com`：
+
+```Shell
+>>> from hashlib import md5
+>>> 'https://www.gravatar.com/avatar/' + md5(b'john@example.com').hexdigest()
+'https://www.gravatar.com/avatar/d4c74594d841139328695756648b6bd6'
+```
+如果你想看一个实际的例子，我自己的Gravatar网址是：
+
+```Shell
+https://www.gravatar.com/avatar/729e26a2a2c7ff24a71958d4aa4e5f35
+```
+以下是Gravatar对这个URL的返回结果：
+
+![ch06-gravatar](/assets/img/ch06-gravatar.jpg "ch06-gravatar")
+
+默认情况下，返回的图像尺寸是80x80像素，但可以通过在URL的查询字符串中添加一个`s`参数来请求不同的尺寸。例如，要获得我自己的头像为128x128像素的图片，URL为： _\linebreak https://www.gravatar.com/avatar/729e26a2a2c7ff24a71958d4aa4e5f35?s=128_。
+
+另一个可以作为查询字符串参数传递给Gravatar的有趣参数是`d`，它决定了Gravatar为那些没有在该服务中注册头像的用户提供什么样的图像。我最喜欢的是 "identicon"，它返回一个漂亮的几何设计，每封邮件都不同。比如说：
+
+![ch06-gravatar-identicon](/assets/img/ch06-gravatar-identicon.png "ch06-gravatar-identicon")
+
+请注意，一些网络浏览器扩展程序，如Ghostery，会阻止Gravatar图像，因为他们认为Automattic（Gravatar服务的所有者）可以根据他们收到的对你的头像的请求，确定你访问的网站。如果你在浏览器中看不到头像，请考虑问题可能是由于你在浏览器中安装了一个扩展。
+
+由于头像是与用户相关联的，因此将生成头像URL的逻辑添加到用户模型中是有意义的。
+
+_app/models.py_: User avatar URLs
+
+```python
+from hashlib import md5
+# ...
+
+class User(UserMixin, db.Model):
+    # ...
+    def avatar(self, size):
+        digest = md5(self.email.lower().encode('utf-8')).hexdigest()
+        return 'https://www.gravatar.com/avatar/{}?d=identicon&s={}'.format(
+            digest, size)
+```
+
+用户类的新`avatar()`方法返回`User`头像的URL，缩放到所要求的像素大小。对于没有注册头像的用户，将生成一个 "identicon "图像。为了生成MD5哈希值，我首先将电子邮件转换为小写，因为这是Gravatar服务的要求。然后，由于Python中的MD5支持在字节上工作，而不是在字符串上，所以我在将字符串传递给哈希函数之前将其编码为字节。
+
+如果你有兴趣了解Gravatar服务提供的其他选项，请访问他们的[文档网站](https://gravatar.com/site/implement/images)。
+
+下一步是在用户资料模板中插入头像图片：
+
+_app/templates/user.html_: User avatar in template
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <table>
+        <tr valign="top">
+            <td><img src="{{ user.avatar(128) }}"></td>
+            <td><h1>User: {{ user.username }}</h1></td>
+        </tr>
+    </table>
+    <hr>
+    {% for post in posts %}
+    <p>
+    {{ post.author.username }} says: <b>{{ post.body }}</b>
+    </p>
+    {% endfor %}
+{% endblock %}
+```
+
+让`User`类负责返回头像的好处是，如果有一天我决定Gravatar头像不是我想要的，我就可以重写`avatar()`方法来返回不同的URL，所有的模板将开始自动显示新的头像。
+
+我在用户资料页面的顶部有一个漂亮的大头像，但实际上没有理由停在那里。我在底部有一些用户的帖子，每个帖子也可以有一个小头像。对于用户资料页来说，当然所有的帖子都会有同样的头像，但是我可以在主页上实现同样的功能，然后每篇帖子都会用作者的头像来装饰，这样看起来真的很不错。
+
+为了显示各个帖子的头像，我只需要在模板中再做一个小改动：
+
+_app/templates/user.html_: User avatars in posts
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <table>
+        <tr valign="top">
+            <td><img src="{{ user.avatar(128) }}"></td>
+            <td><h1>User: {{ user.username }}</h1></td>
+        </tr>
+    </table>
+    <hr>
+    {% for post in posts %}
+    <table>
+        <tr valign="top">
+            <td><img src="{{ post.author.avatar(36) }}"></td>
+            <td>{{ post.author.username }} says:<br>{{ post.body }}</td>
+        </tr>
+    </table>
+    {% endfor %}
+{% endblock %}
+```
+
+![ch06-avatars.png](/assets/img/ch06-avatars.png"ch06-avatars.png")
+
+## Using Jinja2 SUb-Templates
+
+我设计了用户资料页面，使其显示用户所写的帖子，以及他们的头像。现在我想让索引页也显示具有类似布局的帖子。我可以直接复制/粘贴模板中处理帖子的部分，但这并不理想，因为以后如果我决定对这个布局进行修改，我将不得不记住更新两个模板。
+
+相反，我要做一个子模板，只渲染一个帖子，然后我将从 _user.html_ 和 _index.html_ 模板中引用它。首先，我可以创建一个子模板，其中只有一个帖子的HTML标记。我将把这个模板命名为 _app/templates/\_post.html_。`_`前缀只是一个命名惯例，帮助我识别哪些模板文件是子模板。
+
+_app/templates/\_post.html_: Post sub-template
+
+```html
+    <table>
+        <tr valign="top">
+            <td><img src="{{ post.author.avatar(36) }}"></td>
+            <td>{{ post.author.username }} says:<br>{{ post.body }}</td>
+        </tr>
+    </table>
+```
+
+为了从user.html模板中调用这个子模板，我使用Jinja2的`include`语句：
+
+_app/templates/user.html_: User avatars in posts
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <table>
+        <tr valign="top">
+            <td><img src="{{ user.avatar(128) }}"></td>
+            <td><h1>User: {{ user.username }}</h1></td>
+        </tr>
+    </table>
+    <hr>
+    {% for post in posts %}
+        {% include '_post.html' %}
+    {% endfor %}
+{% endblock %}
+```
+
+应用程序的索引页还没有真正充实起来，所以我还不打算在那里添加这个功能。
+
+## More Interesting Profiles
+
+新的用户资料页面有一个问题，就是他们在上面并没有真正展示什么。用户喜欢在这些页面上讲述他们的情况，所以我打算让他们在这里写一些关于他们自己的东西来展示。我还将跟踪每个用户最后一次访问网站的时间，并在他们的个人资料页面上显示出来。
+
+为了支持所有这些额外的信息，我首先要做的是用两个新的字段扩展数据库中的用户表：
+
+_app/models.py_: New fields in user model
+
+```python
+class User(UserMixin, db.Model):
+    # ...
+    about_me = db.Column(db.String(140))
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
+```
+
+每次数据库被修改，都有必要生成一个数据库迁移。在第4章中，我向你展示了如何设置应用程序以通过迁移脚本跟踪数据库的变化。现在我有两个新的字段要添加到数据库中，所以第一步是生成迁移脚本：
+
+```Shell
+(venv) $ flask db migrate -m "new fields in user model"
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.autogenerate.compare] Detected added column 'user.about_me'
+INFO  [alembic.autogenerate.compare] Detected added column 'user.last_seen'
+  Generating migrations/versions/37f06a334dbf_new_fields_in_user_model.py ... done
+```
+`migrate`命令的输出结果看起来不错，因为它显示在`User`类中的两个新字段被检测到。现在我可以把这个变化应用到数据库中：
+
+```Shell
+(venv) $ flask db upgrade
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 780739b227a7 -> 37f06a334dbf, new fields in user model
+```
+我希望你能意识到与迁移框架合作是多么有用。任何在数据库中的用户都还在，迁移框架以外科手术的方式应用迁移脚本中的变化，而不破坏任何数据。
+
+下一步，我将把这两个新字段添加到用户配置文件模板中：
+
+_app/templates/user.html_: Show user information in user profile template
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <table>
+        <tr valign="top">
+            <td><img src="{{ user.avatar(128) }}"></td>
+            <td>
+                <h1>User: {{ user.username }}</h1>
+                {% if user.about_me %}<p>{{ user.about_me }}</p>{% endif %}
+                {% if user.last_seen %}<p>Last seen on: {{ user.last_seen }}</p>{% endif %}
+            </td>
+        </tr>
+    </table>
+    ...
+{% endblock %}
+```
+请注意，我把这两个字段包装在Jinja2的条件中，因为我只想让它们在被设置后才可见。在这一点上，这两个新字段对所有用户来说都是空的，所以如果你现在运行这个应用程序，你不会看到这些字段。
+
+## Recording THe Last Visit Time For a User
+
+让我们从`last_seen`字段开始，这是两个字段中最简单的。我想做的是，只要某个用户向服务器发送请求，就在这个字段上写入当前的时间。
+
+在每一个可能被浏览器请求的视图函数上添加登录来设置这个字段显然是不切实际的，但是在请求被派发到视图函数之前执行一点通用逻辑是Web应用程序中非常常见的任务，所以Flask将其作为一个本地功能提供。看看这个解决方案吧：
+
+_app/routes.py_: Record time of last visit
+
+```python
+from datetime import datetime
+
+@app.before_request
+def before_request():
+    if current_user.is_authenticated:
+        current_user.last_seen = datetime.utcnow()
+        db.session.commit()
+```
+
+Flask的`@before_request`装饰器注册了被装饰的函数，使其在视图函数之前被执行。这非常有用，因为现在我可以在应用程序中的任何视图函数之前插入我想执行的代码，而且我可以把它放在一个地方。这个实现只是检查`current_user`是否登录，在这种情况下，将`last_seen`字段设置为当前时间。我之前提到过，一个服务器应用程序需要在一致的时间单位下工作，标准做法是使用UTC时区。使用系统的本地时间并不是一个好主意，因为这样的话，数据库中的内容就取决于你的位置。最后一步是提交数据库会话，这样上面所做的改变就被写入了数据库。如果你想知道为什么在提交之前没有`db.session.add()`，考虑到当你引用`current_user`时，Flask-Login会调用user loader的回调函数，它将运行一个数据库查询，将目标用户放入数据库会话。所以你可以在这个函数中再次添加用户，但这是不必要的，因为它已经在那里了。
+
+如果你在做了这个改动后查看你的个人资料页面，你会看到 "最后一次见到 "一行的时间与当前时间非常接近。如果你离开个人资料页面，然后再返回，你会看到时间是不断更新的。
+
+事实上，我将这些时间戳存储在UTC时区，使得个人资料页面上显示的时间也是UTC时区的。除此之外，时间的格式也不是你所期望的那样，因为它实际上是Python datetime对象的内部表示。现在，我不打算担心这两个问题，因为我将在后面的章节中讨论在网络应用中处理日期和时间的话题。
+
+![ch06-last-seen.png](/assets/img/ch06-last-seen.png"ch06-last-seen.png")
+
+## Profile Editor
+
+我还需要给用户一个表单，让他们可以输入一些关于自己的信息。这个表单将让用户改变他们的用户名，并写一些关于他们自己的信息，这些信息将被保存在新的`about_me`域中。让我们开始为它编写一个表单类：
+
+_app/forms.py_: Profile editor form
+
+```python
+from wtforms import StringField, TextAreaField, SubmitField
+from wtforms.validators import DataRequired, Length
+
+# ...
+
+class EditProfileForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    about_me = TextAreaField('About me', validators=[Length(min=0, max=140)])
+    submit = SubmitField('Submit')
+```
+
+我在这个表单中使用了一个新的字段类型和一个新的验证器。对于` "About" `字段，我使用了`TextAreaField`，它是一个多行框，用户可以在其中输入文本。为了验证这个字段，我使用了`Length`，它将确保输入的文本在0到140个字符之间，这是我在数据库中为相应字段分配的空间。
+
+渲染这个表单的模板如下所示：
+
+_app/templates/edit_profile.html_: Profile editor form
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>Edit Profile</h1>
+    <form action="" method="post">
+        {{ form.hidden_tag() }}
+        <p>
+            {{ form.username.label }}<br>
+            {{ form.username(size=32) }}<br>
+            {% for error in form.username.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>
+            {{ form.about_me.label }}<br>
+            {{ form.about_me(cols=50, rows=4) }}<br>
+            {% for error in form.about_me.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>{{ form.submit() }}</p>
+    </form>
+{% endblock %}
+```
+最后，这里是将一切联系起来的视图功能：
+
+_app/routes.py_: Edit profile view function
+
+```python
+from app.forms import EditProfileForm
+
+@app.route('/edit_profile', methods=['GET', 'POST'])
+@login_required
+def edit_profile():
+    form = EditProfileForm()
+    if form.validate_on_submit():
+        current_user.username = form.username.data
+        current_user.about_me = form.about_me.data
+        db.session.commit()
+        flash('Your changes have been saved.')
+        return redirect(url_for('edit_profile'))
+    elif request.method == 'GET':
+        form.username.data = current_user.username
+        form.about_me.data = current_user.about_me
+    return render_template('edit_profile.html', title='Edit Profile',form=form)
+```
+这个视图函数以一种稍微不同的方式处理表单。如果`validate_on_submit()`返回`True`，我就把表单中的数据复制到用户对象中，然后把该对象写入数据库中。但是当`validate_on_submit()`返回`False`时，可能是由于两个不同的原因。首先，这可能是因为浏览器刚刚发送了一个`GET`请求，我需要通过提供一个初始版本的表单模板来回应。也有可能是浏览器发送了一个带有表单数据的`POST`请求，但数据中有些东西是无效的。对于这个表单，我需要分别处理这两种情况。当表单第一次被`GET`请求时，我想用存储在数据库中的数据预先填充字段，所以我需要做与提交情况相反的事情，将存储在用户字段中的数据移到表单中，因为这将确保这些表单字段有为用户存储的当前数据。但是在验证错误的情况下，我不想向表单字段写任何东西，因为那些字段已经被WTForms填充了。为了区分这两种情况，我检查了`request.method`，对于最初的请求，它将是`GET`，而对于验证失败的提交，它将是`POST`。
+
+![ch06-user-profile](/assets/img/ch06-user-profile.png"ch06-user-profile")
+
+为了方便用户访问个人资料编辑页面，我可以在他们的个人资料页面添加一个链接：
+
+_app/templates/user.html_: Edit profile link
+
+```html
+                {% if user == current_user %}
+                <p><a href="{{ url_for('edit_profile') }}">Edit your profile</a></p>
+                {% endif %}
+```
+
+请注意我所使用的巧妙条件，以确保在你查看自己的资料时出现编辑链接，而在你查看别人的资料时则不出现。
+
+![ch06-user-profile-link](/assets/img/ch06-user-profile-link.png"ch06-user-profile-link")
+
