@@ -1003,7 +1003,7 @@ def register():
 
 而这个视图功能也应该大部分是不言自明的。我首先要确保调用这个路径的用户没有登录。这个表单的处理方式与登录时的处理方式相同。在`if validate_on_submit()`条件中完成的逻辑是用提供的用户名、电子邮件和密码创建一个新的用户，将其写入数据库，然后重定向到登录提示，这样用户就可以登录了。
 
-![ch05-register-form](/assets/img/ch05-register-form.png"ch05-register-form")
+![ch05-register-form](/assets/img/ch05-register-form.png "ch05-register-form")
 
 有了这些变化，用户应该能够在这个应用程序上创建账户，并登录和退出。请确保你尝试我在注册表单中添加的所有验证功能，以更好地了解它们的工作原理。我将在未来的一章中重新审视用户验证子系统，以增加额外的功能，如允许用户在忘记密码时重置密码。但现在，这已经足够了，可以继续构建应用程序的其他区域。
 
@@ -1178,7 +1178,7 @@ _app/templates/user.html_: User avatars in posts
 {% endblock %}
 ```
 
-![ch06-avatars.png](/assets/img/ch06-avatars.png"ch06-avatars.png")
+![ch06-avatars.png](/assets/img/ch06-avatars.png "ch06-avatars.png")
 
 ## Using Jinja2 SUb-Templates
 
@@ -1302,7 +1302,7 @@ Flask的`@before_request`装饰器注册了被装饰的函数，使其在视图�
 
 事实上，我将这些时间戳存储在UTC时区，使得个人资料页面上显示的时间也是UTC时区的。除此之外，时间的格式也不是你所期望的那样，因为它实际上是Python datetime对象的内部表示。现在，我不打算担心这两个问题，因为我将在后面的章节中讨论在网络应用中处理日期和时间的话题。
 
-![ch06-last-seen.png](/assets/img/ch06-last-seen.png"ch06-last-seen.png")
+![ch06-last-seen.png](/assets/img/ch06-last-seen.png "ch06-last-seen.png")
 
 ## Profile Editor
 
@@ -1377,7 +1377,7 @@ def edit_profile():
 ```
 这个视图函数以一种稍微不同的方式处理表单。如果`validate_on_submit()`返回`True`，我就把表单中的数据复制到用户对象中，然后把该对象写入数据库中。但是当`validate_on_submit()`返回`False`时，可能是由于两个不同的原因。首先，这可能是因为浏览器刚刚发送了一个`GET`请求，我需要通过提供一个初始版本的表单模板来回应。也有可能是浏览器发送了一个带有表单数据的`POST`请求，但数据中有些东西是无效的。对于这个表单，我需要分别处理这两种情况。当表单第一次被`GET`请求时，我想用存储在数据库中的数据预先填充字段，所以我需要做与提交情况相反的事情，将存储在用户字段中的数据移到表单中，因为这将确保这些表单字段有为用户存储的当前数据。但是在验证错误的情况下，我不想向表单字段写任何东西，因为那些字段已经被WTForms填充了。为了区分这两种情况，我检查了`request.method`，对于最初的请求，它将是`GET`，而对于验证失败的提交，它将是`POST`。
 
-![ch06-user-profile](/assets/img/ch06-user-profile.png"ch06-user-profile")
+![ch06-user-profile](/assets/img/ch06-user-profile.png "ch06-user-profile")
 
 为了方便用户访问个人资料编辑页面，我可以在他们的个人资料页面添加一个链接：
 
@@ -1391,5 +1391,5 @@ _app/templates/user.html_: Edit profile link
 
 请注意我所使用的巧妙条件，以确保在你查看自己的资料时出现编辑链接，而在你查看别人的资料时则不出现。
 
-![ch06-user-profile-link](/assets/img/ch06-user-profile-link.png"ch06-user-profile-link")
+![ch06-user-profile-link](/assets/img/ch06-user-profile-link.png "ch06-user-profile-link")
 
