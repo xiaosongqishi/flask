@@ -1393,3 +1393,290 @@ _app/templates/user.html_: Edit profile link
 
 ![ch06-user-profile-link](/assets/img/ch06-user-profile-link.png "ch06-user-profile-link")
 
+# Chapter7:Error Handling
+
+在本章中，我将暂停在我的微博应用程序中编写新功能，而是讨论一些处理错误的策略，这些错误总是会出现在每个软件项目中。 为了帮助说明这个主题，我故意在第 6 章中添加的代码中遗漏了一个错误。在继续阅读之前，看看您是否能找到它！
+
+## Error Handling in Flask
+
+当 Flask 应用程序发生错误时会发生什么？ 找出答案的最好方法是亲身体验。 继续并启动应用程序，并确保您至少注册了两个用户。 以其中一个用户身份登录，打开个人资料页面并单击“编辑”链接。 在配置文件编辑器中，尝试将用户名更改为另一个已注册用户的用户名，然后砰！ 这将带来一个看起来很可怕的“内部服务器错误”页面：
+
+![ch07-500-error](/assets/img/ch07-500-error.png "ch07-500-error")
+
+如果查看应用程序运行的终端会话，您将看到错误的堆栈跟踪。 堆栈跟踪在调试错误时非常有用，因为它们显示了该堆栈中的调用顺序，一直到产生错误的行：
+
+```Shell
+(venv) $ flask run
+ * Serving Flask app "microblog"
+ * Running on http://127.0.0.1:5000/ (Press CTRL+C to quit)
+[2021-06-14 22:40:02,027] ERROR in app: Exception on /edit_profile [POST]
+Traceback (most recent call last):
+  File "venv/lib/python3.6/site-packages/sqlalchemy/engine/base.py", in _execute_context
+    context)
+  File "venv/lib/python3.6/site-packages/sqlalchemy/engine/default.py", in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.IntegrityError: UNIQUE constraint failed: user.username
+```
+堆栈跟踪指示了错误所在。该应用程序允许用户更改用户名，但不验证新选择的用户名是否与系统中已有的其他用户冲突。错误来自SQLAlchemy，它尝试将新用户名写入数据库，但是由于`username`列定义为`unique=True`，因此数据库拒绝了它。
+
+需要注意的是，向用户呈现的错误页面并没有提供有关错误的太多信息，这是好事。我绝对不希望用户知道崩溃是由数据库错误引起的，或者我正在使用哪个数据库，或者我的数据库中有哪些表和字段名称。所有这些信息都应该保持内部。
+
+有一些问题远非理想。我有一个非常丑陋且与应用程序布局不匹配的错误页面。我还需要在终端上倾泻重要的应用程序堆栈跟踪以确保不会错过任何错误。当然，我也有一个bug需要修复。 我将解决所有这些问题，但首先让我们谈谈Flask _调试模式_。
+
+# Debug Mode
+
+你上面看到的错误处理方式非常适合在生产服务器上运行的系统。如果出现错误，用户会收到一个模糊的错误页面（尽管我将使这个错误页面更好），而重要的错误细节则在服务器进程输出或日志文件中。
+
+但是，在开发应用程序时，您可以启用调试模式，这是 Flask 直接在浏览器上输出真正漂亮的调试器的一种模式。要激活调试模式，请停止应用程序，然后设置以下环境变量：
+
+```Shell 
+(venv) $ export FLASK_ENV=development
+```
+
+如果您使用的是 Microsoft Windows，请记得使用 `set` 而不是 `export`。
+
+在设置 `FLASK_ENV` 后，重新启动服务器。您终端上的输出将与您习惯看到的略有不同：
+
+```Shell
+(venv) microblog2 $ flask run
+ * Serving Flask app 'microblog.py' (lazy loading)
+ * Environment: development
+ * Debug mode: on
+ * Running on http://127.0.0.1:5000/ (Press CTRL+C to quit)
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 118-204-854
+ ```
+
+现在让应用程序再次崩溃，以查看浏览器中的交互式调试器：
+![ch07-debugger](/assets/img/ch07-debugger.png "ch07-debugger")
+
+调试器允许您展开每个堆栈帧并查看相应的源代码。 您还可以在任何框架上打开Python提示符并执行任何有效的Python表达式，例如检查变量的值。
+
+非常重要的是，您永远不要在生产服务器上以调试模式运行Flask应用程序。 调试器允许用户在服务器上远程执行代码，因此它可能成为想要渗透您的应用程序或服务器的恶意用户意外获得的礼物。 作为额外的安全措施，在浏览器中运行的调试器会启动锁定，并且第一次使用时将请求PIN号码，该号码可以在`flask run`命令输出中看到。
+
+既然我正在谈论调试模式，我应该提到启用了调试模式后激活第二个重要功能——重新加载程序。 这是一个非常有用的开发功能，当修改源文件时自动重新启动应用程序。 如果您在调试模式下运行`flask run`，则可以随时对应用程序进行操作，并且每次保存文件时都会重新启动以获取新代码。
+
+## Custom Error Pages
+
+Flask 提供了一种机制，使应用程序能够安装自己的错误页面，这样您的用户就不必看到普通和无聊的默认页面。例如，让我们为 HTTP 错误 404 和 500 定义自定义错误页面，这是最常见的两个错误。为其他错误定义页面的方式相同。
+
+要声明自定义错误处理程序，请使用 `@errorhandler` 装饰器。我将把我的错误处理程序放在一个新的 _app/errors.py_ 模块中。
+
+_app/errors.py_: Custom error handlers
+
+```python
+from flask import render_template
+from app import app, db
+
+@app.errorhandler(404)
+def not_found_error(error):
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    return render_template('500.html'), 500
+```
+
+错误函数的工作方式与视图函数非常相似。对于这两个错误，我返回它们各自模板的内容。请注意，这两个函数在模板之后都返回第二个值，即错误代码编号。到目前为止，我创建的所有视图函数都不需要添加第二个返回值，因为默认情况下200（成功响应的状态码）是我想要的。但在这种情况下是错误页面，所以我希望响应状态码反映出来。
+
+500 错误处理程序可能会在数据库错误之后被调用，在上面重复用户名时实际上就是如此。为了确保任何失败的数据库会话不会干扰由模板触发的任何数据库访问，请执行会话回滚操作。这将使会话恢复到一个干净状态。
+
+以下是404错误页面模板：
+
+_app/templates/404.html_: Not found error template
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>File Not Found</h1>
+    <p><a href="{{ url_for('index') }}">Back</a></p>
+{% endblock %}
+```
+这是针对500错误的页面模板：
+_app/templates/500.html_: Internal server error template
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>An unexpected error has occurred</h1>
+    <p>The administrator has been notified. Sorry for the inconvenience!</p>
+    <p><a href="{{ url_for('index') }}">Back</a></p>
+{% endblock %}
+```
+两个模板都继承自`base.html`模板，因此错误页面与应用程序的普通页面具有相同的外观和感觉。
+
+要将这些错误处理程序注册到Flask中，我需要在创建应用程序实例后导入新的 _app/errors.py_ 模块：
+
+_app/\_\_init\_\_.py_: Import error handlers
+
+```python
+# ...
+
+from app import routes, models, errors
+```
+
+如果您在终端会话中设置了`FLASK_ENV=production`，然后再次触发重复的用户名错误，您将看到一个稍微友好一些的错误页面。
+![ch07-500-custom](/assets/img/ch07-500-custom.png "ch07-500-custom")
+
+## Sending Error by Email
+
+Flask提供的默认错误处理存在另一个问题，即没有通知，错误的堆栈跟踪会打印到终端上，这意味着需要监视服务器进程的输出以发现错误。在开发过程中运行应用程序时，这是完全可以接受的，但一旦将应用程序部署到生产服务器上，就不会有人查看输出了，因此需要采取更强大的解决方案。
+
+我认为采取积极主动的方法来处理错误非常重要。如果在应用程序生产版本中出现错误，则希望立即得知。因此我的第一个解决方案是配置Flask，在出现错误后立即向我发送电子邮件，并将堆栈跟踪放入电子邮件正文中。
+
+第一步是将电子邮件服务器详细信息添加到配置文件中：
+
+_config.py_: Email configuration
+
+```python
+class Config(object):
+    # ...
+    MAIL_SERVER = os.environ.get('MAIL_SERVER')
+    MAIL_PORT = int(os.environ.get('MAIL_PORT') or 25)
+    MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS') is not None
+    MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
+    MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
+    ADMINS = ['your-email@example.com']
+```
+
+电子邮件的配置变量包括服务器和端口、一个布尔标志以启用加密连接，以及可选的用户名和密码。这五个配置变量是从它们的环境变量对应项中获取的。如果在环境中没有设置电子邮件服务器，则我将使用此作为禁用发送错误电子邮件的信号。电子邮件服务器端口也可以在环境变量中给出，但如果未设置，则使用标准端口25。默认情况下不使用电子邮件服务器凭据，但如有需要可以提供。`ADMINS`配置变量是接收错误报告的电子邮件地址列表，因此您自己的电子邮件地址应该在该列表中。
+
+Flask使用Python`logging`包来编写其日志，并且该包已经具有通过电子邮件发送日志的功能。要使错误时发送电子邮件，我只需向Flask记录器对象`app.logger`添加[SMTPHandler](https://docs.python.org/3.6/library/logging.handlers.html#smtphandler)实例即可：
+
+_app/\_\_init\_\_.py_: Log errors by email
+
+```python
+import logging
+from logging.handlers import SMTPHandler
+# ...
+if not app.debug:
+    if app.config['MAIL_SERVER']:
+        auth = None
+        if app.config['MAIL_USERNAME'] or app.config['MAIL_PASSWORD']:
+            auth = (app.config['MAIL_USERNAME'], app.config['MAIL_PASSWORD'])
+        secure = None
+        if app.config['MAIL_USE_TLS']:
+            secure = ()
+        mail_handler = SMTPHandler(
+            mailhost=(app.config['MAIL_SERVER'], app.config['MAIL_PORT']),
+            fromaddr='no-reply@' + app.config['MAIL_SERVER'],
+            toaddrs=app.config['ADMINS'], subject='Microblog Failure',
+            credentials=auth, secure=secure)
+        mail_handler.setLevel(logging.ERROR)
+        app.logger.addHandler(mail_handler)
+```
+
+正如您所看到的，我只会在应用程序没有调试模式运行时启用电子邮件记录器，这可以通过`app.debug`为`True`以及配置中存在电子邮件服务器来指示。
+
+由于必须处理许多电子邮件服务器中存在的可选安全选项，因此设置电子邮件记录器有些繁琐。但本质上，上面的代码创建了一个`SMTPHandler`实例，并将其级别设置为仅报告错误而不是警告、信息或调试消息，并最终将其附加到Flask的`app.logger`对象上。
+
+测试此功能有两种方法。最简单的方法是使用Python提供的SMTP调试服务器。这是一个虚假的电子邮件服务器，它接受电子邮件，但不发送它们，而是将它们打印到控制台。要运行此服务器，请打开第二个终端会话并在其中运行以下命令：
+
+```Shell
+(venv) $ python -m smtpd -n -c DebuggingServer localhost:8025
+```
+
+让调试SMTP服务器保持运行状态，回到第一个终端并在环境中设置`export MAIL_SERVER=localhost`和`MAIL_PORT=8025`（如果您使用Microsoft Windows，请使用`set`而不是`export`）。确保`FLASK_ENV`变量设置为`production`或未设置，因为应用程序将不会在调试模式下发送电子邮件。运行应用程序并再次触发SQLAlchemy错误，以查看运行虚假电子邮件服务器的终端会话如何显示带有完整堆栈跟踪错误的电子邮件。
+
+这个功能的第二种测试方法是配置真实的电子邮件服务器。以下是使用Gmail帐户的电子邮件服务器进行配置：
+
+```
+export MAIL_SERVER=smtp.googlemail.com
+export MAIL_PORT=587
+export MAIL_USE_TLS=1
+export MAIL_USERNAME=<your-gmail-username>
+export MAIL_PASSWORD=<your-gmail-password>
+```
+
+如果您使用的是Microsoft Windows，请记得在上述每个语句中使用`set`而不是`export`。
+
+您Gmail帐户中的安全功能可能会阻止应用程序通过它发送电子邮件，除非您明确允许“较不安全的应用程序”访问您的Gmail帐户。 您可以在[此处](https://support.google.com/accounts/answer/6010255?hl=en)阅读有关此内容的信息，如果您担心帐户的安全性，可以创建一个仅用于测试电子邮件配置的二次账户，或者只暂时启用较不安全的应用程序来运行此测试，然后恢复默认设置。
+
+另一种选择是使用专门的电子邮件服务（例如[SendGrid](https://sendgrid.com/)），该服务允许您在免费账户上每天发送最多100封电子邮件。 SendGrid博客详细介绍了[如何在Flask应用程序中使用该服务](https://sendgrid.com/blog/sending-emails-from-python-flask-applications-with-twilio-sendgrid/)。
+
+## Logging to a File
+
+通过电子邮件接收错误信息很好，但有时这还不够。有些故障条件并没有以Python异常的形式结束，并且它们不是一个主要问题，但仍然可能足够有趣以便于调试目的保存下来。因此，我还将为应用程序维护一个日志文件。
+
+为了启用基于文件的日志记录，需要将另一个处理程序（这次是`RotatingFileHandler`类型）附加到应用程序记录器上，类似于电子邮件处理程序。
+
+_app/\_\_init\_\_.py_: Logging to a file
+
+```python
+# ...
+from logging.handlers import RotatingFileHandler
+import os
+
+# ...
+
+if not app.debug:
+    # ...
+
+    if not os.path.exists('logs'):
+        os.mkdir('logs')
+    file_handler = RotatingFileHandler('logs/microblog.log', maxBytes=10240,
+                                       backupCount=10)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Microblog startup')
+```
+我正在创建一个名为`microblog.log`的日志文件，并将其写入logs目录中，如果该目录不存在，则会创建它。
+
+`RotatingFileHandler`类非常好用，因为它可以轮换日志，确保应用程序长时间运行时不会使日志文件变得过大。在这种情况下，我将日志文件大小限制为10KB，并保留最后十个备份日志文件。
+
+`logging.Formatter`类提供了自定义格式化的日志消息。由于这些消息要写入到文件中，所以我希望它们包含尽可能多的信息。因此，我使用了一种格式，其中包括时间戳、记录级别、消息以及生成该日志条目的源代码文件和行号。
+
+为了使记录更有用，在应用程序记录器和文件记录器处理程序中也将记录级别降低到`INFO`类别。如果您不熟悉记录类别，则按严重性递增顺序分为`DEBUG`、`INFO`、`WARNING`、`ERROR`和`CRITICAL`。
+
+作为对日志文件第一个有趣的使用方式，在服务器每次启动时都会向日志中写入一行内容。当此应用程序在生产服务器上运行时，这些日志条目将告诉您服务器何时重新启动。
+
+## Fixing the Duplicate Username Bug
+
+我已经利用了用户名重复漏洞太久了。现在我已经向您展示了如何准备应用程序来处理此类错误，我可以继续修复它。
+
+如果您还记得，`RegistrationForm` 已经实现了用户名验证，但编辑表单的要求略有不同。在注册期间，我需要确保在表单中输入的用户名不存在于数据库中。在编辑个人资料表单上，我必须进行相同的检查，但有一个例外。如果用户未更改原始用户名，则验证应允许该名称通过，因为该用户名已分配给该用户。下面是我如何为此表单实现用户名验证：
+
+_app/forms.py_: Validate username in edit profile form.
+
+```python
+class EditProfileForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    about_me = TextAreaField('About me', validators=[Length(min=0, max=140)])
+    submit = SubmitField('Submit')
+
+    def __init__(self, original_username, *args, **kwargs):
+        super(EditProfileForm, self).__init__(*args, **kwargs)
+        self.original_username = original_username
+
+    def validate_username(self, username):
+        if username.data != self.original_username:
+            user = User.query.filter_by(username=self.username.data).first()
+            if user is not None:
+                raise ValidationError('Please use a different username.')
+```
+
+实现在自定义验证方法中，但是有一个重载的构造函数接受原始用户名作为参数。该用户名保存为实例变量，并在`validate_username()`方法中进行检查。如果表单中输入的用户名与原始用户名相同，则无需检查数据库是否存在重复。
+
+要使用这个新的验证方法，在创建表单对象的视图函数中需要添加原始用户名参数：
+
+_app/routes.py_: Validate username in edit profile form.
+
+```python
+@app.route('/edit_profile', methods=['GET', 'POST'])
+@login_required
+def edit_profile():
+    form = EditProfileForm(current_user.username)
+    # ...
+```
+
+现在该错误已经修复，大多数情况下将防止编辑个人资料表单中的重复。这不是一个完美的解决方案，因为当两个或更多进程同时访问数据库时可能无法工作。在那种情况下，竞争条件可能会导致验证通过，但稍后尝试重命名时，数据库已被另一个进程更改，并且无法重命名用户。除非是具有大量服务器进程的非常繁忙的应用程序，否则这种情况不太可能发生，所以我现在不会担心它。
+
+此时您可以再次尝试重现错误以查看新表单验证方法如何防止它。
