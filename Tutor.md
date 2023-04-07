@@ -1731,7 +1731,9 @@ def edit_profile():
 该关系的第二个实体也是用户。一个类的实例与同一类的其他实例相联系的关系被称为自指关系(_self-referential_)，而这正是我在这里的情况。
 
 下面是跟踪追随者的自我参照的多对多关系的图示：
+    
 ![ch08-followers-schema](/assets/img/ch08-followers-schema.png "ch08-followers-schema")
+    
 跟随者表是该关系的关联表。这个表中的外键都是指向用户表中的条目，因为它是将用户与用户联系起来的。这个表中的每条记录都代表一个追随者用户和被追随者用户之间的一个联系。就像学生和教师的例子一样，这样的设置允许数据库回答我所需要的关于被关注用户和关注者的所有问题。相当整洁。
 
 ## Database Model Representation
