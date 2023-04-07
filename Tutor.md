@@ -1,3 +1,5 @@
+
+
 # Chapter 3
 
 ## Receiving Form Data
@@ -1680,3 +1682,518 @@ def edit_profile():
 现在该错误已经修复，大多数情况下将防止编辑个人资料表单中的重复。这不是一个完美的解决方案，因为当两个或更多进程同时访问数据库时可能无法工作。在那种情况下，竞争条件可能会导致验证通过，但稍后尝试重命名时，数据库已被另一个进程更改，并且无法重命名用户。除非是具有大量服务器进程的非常繁忙的应用程序，否则这种情况不太可能发生，所以我现在不会担心它。
 
 此时您可以再次尝试重现错误以查看新表单验证方法如何防止它。
+
+# Chapter8:Followers
+
+在这一章中，我将对应用程序的数据库进行更多的工作。我希望应用程序的用户能够轻松地选择他们想要关注的其他用户。因此，我将扩展数据库，使其能够跟踪谁在关注谁，这比你想象的要棘手。
+
+## Database Relationships Revisited
+
+我在上面说，我想为每个用户维护一个 "被关注 "和 "关注者 "的列表。不幸的是，关系型数据库没有我可以用于这些列表的列表类型，有的只是带有记录和这些记录之间关系的表。
+
+数据库有一个代表用户的表，所以剩下的就是想出适当的关系类型来模拟关注者/被关注者的链接。这是一个回顾基本数据库关系类型的好时机：
+
+### One-to-Many
+
+我在第四章已经使用了一对多的关系。下面是这种关系的示意图：
+![ch04-users-posts](/assets/img/ch04-users-posts.png "ch04-users-posts")
+
+由这种关系连接的两个实体是用户和帖子。我说，一个用户有很多帖子，而一个帖子有一个用户（或作者）。这种关系在数据库中通过在 "许多 "一侧使用外键(_forign key_)来表示。在上面的关系中，外键是添加到`posts`表中的`user_id`字段。这个字段将每个帖子与用户表中的作者记录联系在一起。
+
+很明显，`user_id字`段提供了对某一特定帖子的作者的直接访问，但反过来说呢？为了使这种关系变得有用，我应该能够得到一个给定用户所写的帖子的列表。`posts`表中的`user_id`字段也足以回答这个问题，因为数据库有索引，可以进行有效的查询，例如 "检索所有user_id为X的帖子"。
+
+### Many-to-Many
+
+多对多的关系就比较复杂了。作为一个例子，考虑一个有学生和教师的数据库。我可以说一个学生有很多老师，而一个老师有很多学生。这就像两端重叠的一对多关系。
+
+对于这种类型的关系，我应该能够查询数据库并获得教某个学生的教师列表，以及教师班上的学生列表。这在关系型数据库中实际上是不难表现的，因为它不能通过向现有的表添加外键来完成。
+
+表示多对多的关系需要使用一个称为关联表的辅助表。下面是学生和教师例子中的数据库的样子：
+![ch08-students-teachers](/assets/img/ch08-students-teachers.png "ch08-students-teachers")
+
+虽然一开始看起来并不明显，但带有两个外键的关联表能够有效地回答关于关系的所有查询。
+
+### Many-to-One and One-to-One
+多对一类似于一对多的关系。不同的是，这种关系是从 "多 "的方面来看的。
+
+一对一关系是一对多的一个特例。其表现形式类似，但在数据库中加入了一个约束条件，以防止 "多 "方有一个以上的链接。虽然在某些情况下，这种关系是有用的，但它不像其他类型那样常见。
+
+## Representing Followers
+
+看看所有关系类型的总结，很容易确定跟踪追随者的正确数据模型是多对多的关系，因为一个用户关注 _许多_ 用户，而一个用户有 _许多_ 追随者。但是有一个转折。在学生和教师的例子中，我有两个实体是通过多对多的关系联系起来的。但是在关注者的例子中，我有用户关注其他用户，所以只有用户。那么，多对多关系的第二个实体是什么？
+
+该关系的第二个实体也是用户。一个类的实例与同一类的其他实例相联系的关系被称为自指关系(_self-referential_)，而这正是我在这里的情况。
+
+下面是跟踪追随者的自我参照的多对多关系的图示：
+![ch08-followers-schema](/assets/img/ch08-followers-schema.png "ch08-followers-schema")
+跟随者表是该关系的关联表。这个表中的外键都是指向用户表中的条目，因为它是将用户与用户联系起来的。这个表中的每条记录都代表一个追随者用户和被追随者用户之间的一个联系。就像学生和教师的例子一样，这样的设置允许数据库回答我所需要的关于被关注用户和关注者的所有问题。相当整洁。
+
+## Database Model Representation
+让我们先把`followers`添加到数据库中。这里是`followers`关联表：
+
+_app/models.py_: Followers association table
+
+```python
+followers = db.Table('followers',
+    db.Column('follower_id', db.Integer, db.ForeignKey('user.id')),
+    db.Column('followed_id', db.Integer, db.ForeignKey('user.id'))
+)
+```
+
+这是我上图中关联表的直接翻译。请注意，我没有把这个表作为一个模型来声明，就像我为用户和帖子表所做的那样。因为这是一个辅助表，除了外键之外没有其他数据，所以我创建它时没有关联的模型类。
+
+现在我可以在用户表中声明多对多的关系：
+_app/models.py_: Many-to-many followers relationship
+
+```python
+class User(UserMixin, db.Model):
+    # ...
+    followed = db.relationship(
+        'User', secondary=followers,
+        primaryjoin=(followers.c.follower_id == id),
+        secondaryjoin=(followers.c.followed_id == id),
+        backref=db.backref('followers', lazy='dynamic'), lazy='dynamic')
+```
+这个关系的设置并不复杂。就像我对`posts`的一对多关系所做的那样，我使用`db.relationship`函数来定义模型类中的关系。这种关系将`User`实例链接到其他`User`实例上，所以作为惯例，我们说对于由这种关系链接的一对用户，左边的用户是跟随右边的用户。我定义的关系是从左边的用户看到的，名字是`followed`，因为当我从左边查询这个关系时，我将得到被关注的用户列表（即右边的用户）。让我们逐一检查 `db.relationship()` 调用的所有参数：
+
+* `User`是这个关系的右侧实体（左侧实体是父类）。由于这是一个自指关系，我必须在两边使用相同的类。
+* `secondary`配置用于这种关系的关联表，我在这个类上面定义了它。
+* `primaryjoin`表示连接左侧实体（跟随者用户）和关联表的条件。关系左侧的连接条件是与关联表的`follower_id`字段匹配的用户ID。这个参数的值是`followers.c.follower_id`，它引用了关联表的`follower_id`列。
+* `secondaryjoin`表示将右边的实体（被关注的用户）与关联表联系起来的条件。这个条件类似于`primaryjoin`的条件，唯一的区别是现在我使用`followed_id`，它是关联表中的另一个外键。
+* `backref`定义了如何从右边的实体访问这种关系。从左边来看，这个关系被命名为`followed`，所以从右边来看，我将使用`followers`这个名字来代表所有与右边的目标用户有联系的左边用户。额外的`lazy`参数表示这个查询的执行模式。一个`dynamic`的模式设置了查询，直到特别要求才运行，这也是我设置帖子一对多关系的方式。
+* `lazy`与`backref`中的同名参数类似，但这个参数适用于左边的查询，而不是右边的。
+
+如果这很难理解，请不要担心。我一会儿会告诉你如何使用这些查询，然后一切都会变得更加清晰。
+
+对数据库的改变需要记录在一个新的数据库迁移中：
+```Shell
+(venv) $ flask db migrate -m "followers"
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.autogenerate.compare] Detected added table 'followers'
+  Generating /home/miguel/microblog/migrations/versions/ae346256b650_followers.py ... done
+
+(venv) $ flask db upgrade
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 37f06a334dbf -> ae346256b650, followers
+```
+
+## Adding and Removing "follows"
+
+感谢SQLAlchemy ORM，一个用户跟随另一个用户，可以在数据库中记录下被跟随的关系，就像它是一个列表一样。例如，如果我有两个用户存储在`user1`和`user2`变量中，我可以用这个简单的语句使第一个用户跟随第二个用户：
+
+```user1.followed.append(user2)```
+
+要取关用户，那么我可以做：
+
+```user1.followed.remove(user2)```
+
+尽管添加和删除关注者是相当容易的，但我想在我的代码中促进可重用性，所以我不打算在代码中撒上`appends`和`removes`。相反，我将把`follow`和`unfollow`功能作为`User`模型的方法来实现。最好是将应用逻辑从视图函数中移出，移到模型或其他辅助类或模块中，因为正如你在本章后面所看到的，这使得单元测试更加容易。
+
+下面是用户模型中增加和删除关系的变化：
+_app/models.py_: Add and remove followers
+
+```python
+class User(UserMixin, db.Model):
+    #...
+
+    def follow(self, user):
+        if not self.is_following(user):
+            self.followed.append(user)
+
+    def unfollow(self, user):
+        if self.is_following(user):
+            self.followed.remove(user)
+
+    def is_following(self, user):
+        return self.followed.filter(
+            followers.c.followed_id == user.id).count() > 0
+```
+
+`follow()`和`unfollow()`方法使用关系对象的`append()`和`remove()`方法，正如我在上面显示的那样，但是在它们接触关系之前，它们使用`is_following()`支持方法来确保请求的操作是合理的。例如，如果我要求`user1`跟随`user2`，但结果发现这个跟随关系已经存在于数据库中，我不想增加一个重复的关系。同样的逻辑也可以应用于取消关注的情况。
+
+`is_following()`方法对`followed`关系发出查询，以检查两个用户之间的链接是否已经存在。你以前看到过我使用SQLAlchemy查询对象的`filter_by()`方法，例如找到一个用户的用户名。我在这里使用的`filter()`方法是类似的，但层次较低，因为它可以包括任意的过滤条件，不像`filter_by()`只能检查是否与一个常量值相等。我在`is_following()`中使用的条件是在关联表中寻找那些左边外键设置为`self` user，右边设置为`user`参数的项目。该查询以`count()`方法结束，该方法返回结果的数量。这个查询的结果将是`0`或`1`，所以检查计数是否为1或大于0实际上是等同的。你在过去看到我使用的其他查询终止器是`all()`和`first()`。
+
+## Obtaining the Posts from Followed Users
+
+对数据库中追随者的支持几乎已经完成，但实际上我还缺少一个重要的功能。在应用程序的索引页中，我要显示所有被登录用户关注的人写的博客文章，所以我需要想出一个数据库查询来返回这些文章。
+
+最明显的解决方案是运行一个返回被关注用户列表的查询，正如你已经知道的，它应该是`user.followed.all()`。然后对于每个返回的用户，我可以运行一个查询来获取帖子。一旦我有了所有的帖子，我就可以把它们合并到一个列表中，并按日期排序。听起来不错吧？嗯，不是真的。
+
+这种方法有几个问题。如果一个用户关注了一千个人，会发生什么？我将需要执行一千个数据库查询，只是为了收集所有的帖子。然后我还需要在内存中对这一千个列表进行合并和排序。作为一个次要的问题，考虑到应用程序的主页最终将实现分页(_pagination_)，所以它不会显示所有可用的帖子，而只是显示前几个，如果需要的话，还可以通过链接获得更多的帖子。如果我打算显示按日期排序的帖子，我怎么能知道哪些帖子是所有被关注的用户中最新的，除非我先得到所有的帖子并对它们进行排序？这实际上是一个糟糕的解决方案，不能很好地扩展。
+
+真的没有办法避免这种博客文章的合并和排序，但在应用程序中这样做会导致一个非常低效的过程。这种工作是关系型数据库所擅长的。数据库有索引，允许它以更有效的方式进行查询和排序，这是我在自己这边可以做到的。因此，我真正想要的是提出一个单一的数据库查询，定义我想得到的信息，然后让数据库找出如何以最有效的方式提取这些信息。
+
+下面你可以看到这个查询：
+_app/models.py_: Followed posts query
+
+```pythonclass User(UserMixin, db.Model):
+    #...
+    def followed_posts(self):
+        return Post.query.join(
+            followers, (followers.c.followed_id == Post.user_id)).filter(
+                followers.c.follower_id == self.id).order_by(
+                    Post.timestamp.desc())
+```
+
+这是迄今为止我在这个应用中使用的最复杂的查询。我将试着一步一步地解读这个查询。如果你看一下这个查询的结构，你会发现有三个主要部分是由SQLAlchemy查询对象的join()、filter()和order_by()方法设计的：
+
+```Post.query.join(...).filter(...).order_by(...)```
+
+### Joins
+为了理解连接操作的作用，让我们看一个例子。让我们假设我有一个用户表，其内容如下：
+| id |	username |
+|----|:---------:|
+|1	 |john       |
+|2	 |susan      |
+|3	 |mary       |
+|4	 |david      |
+
+为了简单起见，我不显示用户模型中的所有字段，只显示对这个查询重要的字段。
+
+假设`followers`关联表显示，用户`john`正在关注用户`susan`和`david`，用户`susan`正在关注`mary`，用户`mary`正在关注`david`。表示上述情况的数据是这样的：
+
+
+|follower_id |followed_id|
+|------------|-----------|
+|1           |      	2|
+|1           |      	4|
+|2           |      	3|
+|3           |      	4|
+
+最后，帖子表包含每个用户的一个帖子：
+
+|id	|text	    |user_id |
+|---|-----------|--------|
+|1	|post from susan|	2|
+|2	|post from mary |	3|
+|3	|post from david|	4|
+|4	|post from john |	1|
+
+这个表还省略了一些不属于本讨论范围的字段。
+
+下面是我为这个查询再次定义的`join()`调用：
+
+```
+Post.query.join(followers, (followers.c.followed_id == Post.user_id))
+```
+
+我正在调用`posts`表的连接操作。第一个参数是关注者关联表，第二个参数是连接条件。通过这个调用我想说的是，我想让数据库创建一个临时表，将帖子和关注者表中的数据合并起来。这些数据将根据我作为参数传递的条件进行合并。
+
+我使用的条件是，关注者表的`followed_id`字段必须等于帖子表的`user_id`。为了执行这个合并，数据库将从post表中获取每条记录（连接的左边），并从`followers`表中追加任何符合条件的记录（连接的右边）。如果`followers`中的多条记录符合条件，那么帖子条目将对每条记录进行重复。如果对于一个给定的帖子，在关注者表中没有匹配的记录，那么这个帖子记录就不是连接的一部分。
+
+用我上面定义的例子数据，连接操作的结果是：
+
+
+| id | text             | user_id | follower_id | followed_id |
+|----|-----------------|---------|-------------|-------------|
+| 1  | post from susan  | 2       | 1           | 2           |
+| 2  | post from mary   | 3       | 2           | 3           |
+| 3  | post from david  | 4       | 1           | 4           |
+| 3  | post from david  | 4       | 3           | 4           |
+
+请注意，所有情况下的 `user_id` 和 `followed_id` 列都相等，因为这是连接条件。来自用户 `john` 的帖子未出现在连接表中，因为在 `followers` 中没有以 `john` 作为跟随用户的条目，或者换句话说，没有人在关注 `john`。而 `david` 的帖子出现了两次，因为该用户被两个不同的用户关注。
+
+可能并不立即清楚通过创建这个连接，我得到了什么，但请继续阅读，因为这只是更大查询的一部分。
+
+### Filters
+
+连接操作提供了所有被某个用户关注的帖子的列表，这是我真正想要的更多数据。但是，我只对这个列表的一个子集感兴趣，即被单个用户关注的帖子，因此我需要修剪掉所有不需要的条目，这可以通过`filter()`调用来完成。
+
+这是查询的filter部分：
+
+```filter(followers.c.follower_id == self.id)```
+
+由于此查询在 `User` 类的方法中，因此 `self.id` 表达式指的是我感兴趣的用户的用户 ID。`filter()` 调用选择具有 `follower_id` 列设置为此用户的连接表中的项目，这意味着我只保留具有此用户作为关注者的条目。
+
+假设我感兴趣的用户是 `john`，它的 `id` 字段设置为 1。在过滤后，连接表如下所示：
+| id | text            | user_id | follower_id | followed_id |
+|----|----------------|---------|-------------|-------------|
+| 1  | post from susan | 2       | 1           | 2           |
+| 3  | post from david | 4       | 1           | 4           |
+
+而这些恰好就是我想要的帖子！
+
+请记住，查询是在`Post`类上执行的，因此尽管我最终得到了一个由数据库作为此查询的一部分创建的临时表，结果将是包含在此临时表中的帖子，而不是联接操作添加的额外列。
+
+### Sorting
+
+这个过程的最后一步是对结果进行排序。实现排序的部分查询语句如下：
+
+```order_by(Post.timestamp.desc())```
+
+这里我指定了根据每篇博客文章的时间戳字段进行降序排列的排序方式。按照这种排序方式，第一个结果将是最近的博客文章。
+
+## Combining Own and Followed Posts
+
+我在followed_posts()函数中使用的查询非常有用，但是有一个限制。人们希望在他们关注的用户的时间轴中看到自己的帖子，而现有的查询并没有这个能力。
+
+有两种扩展此查询以包括用户自己的帖子的可能方法。最直接的方法是保持查询不变，但确保所有用户都在关注自己。如果您是自己的关注者，则如上所示的查询将找到您自己的帖子以及您关注的所有人的帖子。这种方法的缺点是它会影响有关关注者的统计数据。所有关注者计数都会增加一个，因此必须在显示之前进行调整。第二种方法是创建第二个查询，返回用户自己的帖子，然后使用"union"运算符将两个查询组合成一个单一的查询。
+
+在考虑了两个选项之后，我决定选择第二个选项。下面可以看到扩展后的followed_posts()函数，其中通过union包含了用户的帖子：
+
+_app/models.py_: Followed posts query with user's own posts.
+
+```python
+    def followed_posts(self):
+        followed = Post.query.join(
+            followers, (followers.c.followed_id == Post.user_id)).filter(
+                followers.c.follower_id == self.id)
+        own = Post.query.filter_by(user_id=self.id)
+        return followed.union(own).order_by(Post.timestamp.desc())
+```
+
+注意在排序之前，关注的和自己的查询被合并成了一个查询。
+
+## Unit Testing the User Model
+
+尽管我认为我构建的关注者实现是一个“复杂”的功能，但我也认为它并不是简单的。当我编写非常规代码时，我的关注点是确保这些代码将在未来继续工作，因为我在应用程序的不同部分进行修改。确保您已经编写的代码将在未来继续工作的最好方法是创建一套自动化测试，您可以在每次进行更改时重新运行这些测试。
+
+Python 包括一个非常有用的 `unittest` 包，使编写和执行单元测试变得容易。让我们在 tests.py 模块中为 `User` 类中的现有方法编写一些单元测试：
+
+_tests.py_: User model unit tests.
+
+```python
+import os
+os.environ['DATABASE_URL'] = 'sqlite://'
+
+from datetime import datetime, timedelta
+import unittest
+from app import app, db
+from app.models import User, Post
+
+class UserModelCase(unittest.TestCase):
+    def setUp(self):
+        self.app_context = app.app_context()
+        self.app_context.push()
+        db.create_all()
+
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.app_context.pop()
+
+    def test_password_hashing(self):
+        u = User(username='susan')
+        u.set_password('cat')
+        self.assertFalse(u.check_password('dog'))
+        self.assertTrue(u.check_password('cat'))
+
+    def test_avatar(self):
+        u = User(username='john', email='john@example.com')
+        self.assertEqual(u.avatar(128), ('https://www.gravatar.com/avatar/'
+                                         'd4c74594d841139328695756648b6bd6'
+                                         '?d=identicon&s=128'))
+
+    def test_follow(self):
+        u1 = User(username='john', email='john@example.com')
+        u2 = User(username='susan', email='susan@example.com')
+        db.session.add(u1)
+        db.session.add(u2)
+        db.session.commit()
+        self.assertEqual(u1.followed.all(), [])
+        self.assertEqual(u1.followers.all(), [])
+
+        u1.follow(u2)
+        db.session.commit()
+        self.assertTrue(u1.is_following(u2))
+        self.assertEqual(u1.followed.count(), 1)
+        self.assertEqual(u1.followed.first().username, 'susan')
+        self.assertEqual(u2.followers.count(), 1)
+        self.assertEqual(u2.followers.first().username, 'john')
+
+        u1.unfollow(u2)
+        db.session.commit()
+        self.assertFalse(u1.is_following(u2))
+        self.assertEqual(u1.followed.count(), 0)
+        self.assertEqual(u2.followers.count(), 0)
+
+    def test_follow_posts(self):
+        # create four users
+        u1 = User(username='john', email='john@example.com')
+        u2 = User(username='susan', email='susan@example.com')
+        u3 = User(username='mary', email='mary@example.com')
+        u4 = User(username='david', email='david@example.com')
+        db.session.add_all([u1, u2, u3, u4])
+
+        # create four posts
+        now = datetime.utcnow()
+        p1 = Post(body="post from john", author=u1,
+                  timestamp=now + timedelta(seconds=1))
+        p2 = Post(body="post from susan", author=u2,
+                  timestamp=now + timedelta(seconds=4))
+        p3 = Post(body="post from mary", author=u3,
+                  timestamp=now + timedelta(seconds=3))
+        p4 = Post(body="post from david", author=u4,
+                  timestamp=now + timedelta(seconds=2))
+        db.session.add_all([p1, p2, p3, p4])
+        db.session.commit()
+
+        # setup the followers
+        u1.follow(u2)  # john follows susan
+        u1.follow(u4)  # john follows david
+        u2.follow(u3)  # susan follows mary
+        u3.follow(u4)  # mary follows david
+        db.session.commit()
+
+        # check the followed posts of each user
+        f1 = u1.followed_posts().all()
+        f2 = u2.followed_posts().all()
+        f3 = u3.followed_posts().all()
+        f4 = u4.followed_posts().all()
+        self.assertEqual(f1, [p2, p4, p1])
+        self.assertEqual(f2, [p2, p3])
+        self.assertEqual(f3, [p3, p4])
+        self.assertEqual(f4, [p4])
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
+```
+
+我已经添加了四个测试来测试用户模型中的密码哈希、用户头像和关注者功能。`setUp()`和`tearDown()`方法是特殊的方法，单元测试框架在每个测试之前和之后执行它们。
+
+我实现了一个小技巧，以防止单元测试使用我用于开发的常规数据库。通过将`DATABASE_URL`环境变量设置为`sqlite://`，我改变了应用程序配置，以便在测试期间将SQLAlchemy定向到使用内存中的SQLite数据库。
+
+然后，`setUp()`方法创建一个应用程序上下文并将其推送。这确保了Flask应用程序实例以及其配置数据对于Flask扩展是可访问的。如果您现在不太明白，也不用担心，因为稍后会更详细地介绍。
+
+`db.create_all()`调用创建所有数据库表。这是一种从头开始创建数据库的快速方法，对于测试非常有用。对于开发和生产使用，我已经向您展示了如何通过数据库迁移创建数据库表。
+
+您可以使用以下命令运行整个测试套件：
+
+```Shell
+(venv) $ python tests.py
+test_avatar (__main__.UserModelCase) ... ok
+test_follow (__main__.UserModelCase) ... ok
+test_follow_posts (__main__.UserModelCase) ... ok
+test_password_hashing (__main__.UserModelCase) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.494s
+
+OK
+```
+
+从现在开始，每当对应用程序进行更改时，您都可以重新运行测试，以确保正在测试的功能未受到影响。此外，每次添加另一个功能到应用程序时，都应该为它编写单元测试.
+
+## Integrating Followers with the Application
+
+支持数据库和模型中的关注者功能现在已经完成，但我还没有将这些功能整合到应用程序中，所以我现在要添加它们。
+
+因为关注和取消关注操作会引入应用程序中的更改，所以我将实现它们作为`POST`请求，这些请求是由Web浏览器通过提交Web表单触发的。虽然将这些路由实现为`GET`请求会更容易，但是它们可能会被利用进行[CSRF](http://en.wikipedia.org/wiki/Cross-site_request_forgery)攻击。因为`GET`请求很难防止CSRF攻击，在不引入状态更改的情况下才能使用。通过表单提交来实现这些操作更好，因为可以向表单添加CSRF令牌。
+
+但是如果用户只需要点击“关注”或“取消关注”，而无需提交任何数据，则如何从Web表单触发跟随或取消跟随操作呢？为了使其正常工作，该表单将为空。该表单中唯一存在的元素将是CSRF令牌（作为隐藏字段自动添加），以及一个提交按钮（用户需要点击此按钮来触发操作）。由于两个操作几乎相同，我打算使用同一个表格来处理两个操作，并称之为空白表格（`EmptyForm`）。
+
+_app/forms.py_: Empty form for following and unfollowing.
+
+```python
+class EmptyForm(FlaskForm):
+    submit = SubmitField('Submit')
+```
+
+让我们在应用程序中添加两个新的路由来关注和取消关注用户：
+
+_app/routes.py_: Follow and unfollow routes.
+
+```python
+from app.forms import EmptyForm
+
+# ...
+
+@app.route('/follow/<username>', methods=['POST'])
+@login_required
+def follow(username):
+    form = EmptyForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=username).first()
+        if user is None:
+            flash('User {} not found.'.format(username))
+            return redirect(url_for('index'))
+        if user == current_user:
+            flash('You cannot follow yourself!')
+            return redirect(url_for('user', username=username))
+        current_user.follow(user)
+        db.session.commit()
+        flash('You are following {}!'.format(username))
+        return redirect(url_for('user', username=username))
+    else:
+        return redirect(url_for('index'))
+
+@app.route('/unfollow/<username>', methods=['POST'])
+@login_required
+def unfollow(username):
+    form = EmptyForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=username).first()
+        if user is None:
+            flash('User {} not found.'.format(username))
+            return redirect(url_for('index'))
+        if user == current_user:
+            flash('You cannot unfollow yourself!')
+            return redirect(url_for('user', username=username))
+        current_user.unfollow(user)
+        db.session.commit()
+        flash('You are not following {}.'.format(username))
+        return redirect(url_for('user', username=username))
+    else:
+        return redirect(url_for('index'))
+```
+
+这些路由中的表单处理更简单，因为我们只需要实现提交部分。与其他表单（如登录和编辑个人资料表单）不同，这两个表单没有自己的页面，它们将由`user()`路由呈现，并显示在用户的个人资料页面上。如果`validate_on_submit()`调用失败，则唯一可能原因是CSRF令牌丢失或无效，在这种情况下，我会将应用程序重定向回主页。
+
+如果表单验证通过，则在执行关注或取消关注操作之前进行一些错误检查。这是为了防止意外问题，并尝试在出现问题时向用户提供有用的消息。
+
+要呈现关注或取消关注按钮，我需要实例化一个`EmptyForm`对象并将其传递给user.html模板。因为这两个操作是互斥的，所以我可以将此通用表单的一个实例传递给模板：
+
+_app/routes.py_: Follow and unfollow routes.
+
+```python
+@app.route('/user/<username>')
+@login_required
+def user(username):
+    # ...
+    form = EmptyForm()
+    return render_template('user.html', user=user, posts=posts, form=form)
+```
+
+我现在可以在每个用户的个人资料页面中添加关注或取消关注的表单：
+
+_app/templates/user.html_: Follow and unfollow links in user profile page.
+
+```html
+        ...
+        <h1>User: {{ user.username }}</h1>
+        {% if user.about_me %}<p>{{ user.about_me }}</p>{% endif %}
+        {% if user.last_seen %}<p>Last seen on: {{ user.last_seen }}</p>{% endif %}
+        <p>{{ user.followers.count() }} followers, {{ user.followed.count() }} following.</p>
+        {% if user == current_user %}
+        <p><a href="{{ url_for('edit_profile') }}">Edit your profile</a></p>
+        {% elif not current_user.is_following(user) %}
+        <p>
+            <form action="{{ url_for('follow', username=user.username) }}" method="post">
+                {{ form.hidden_tag() }}
+                {{ form.submit(value='Follow') }}
+            </form>
+        </p>
+        {% else %}
+        <p>
+            <form action="{{ url_for('unfollow', username=user.username) }}" method="post">
+                {{ form.hidden_tag() }}
+                {{ form.submit(value='Unfollow') }}
+            </form>
+        </p>
+        {% endif %}
+        ...
+```
+
+用户个人资料模板的更改在最后一次查看时间戳下面添加了一行，显示此用户有多少个关注者和被关注用户。当您查看自己的个人资料时，“编辑”链接所在的行现在可以有三个可能的链接：
+
+* 如果用户查看自己的个人资料，则“编辑”链接与以前一样显示。
+* 如果用户查看当前未关注的用户，则显示“关注”表单。
+* 如果用户正在查看当前已关注的用户，则显示“取消关注”表单。
+
+为了重用`EmptyForm（）`实例用于跟随和取消关注表单，我在呈现提交按钮时传递了一个`value`参数。在提交按钮中，`value`属性定义标签，因此通过这个技巧，我可以根据需要向用户呈现的操作更改提交按钮中的文本。
+
+此时，您可以运行应用程序，创建一些用户并尝试关注和取消关注用户。您需要记住的唯一一件事是输入您想要关注或取消关注的用户的个人资料页面URL，因为目前没有查看用户列表的方法。例如，如果您想关注用户名为`susan`的用户，则需要在浏览器的地址栏中输入 _http://localhost:5000/user/susan_ 来访问该用户的个人资料页面。确保您检查当您发出关注或取消关注时，关注者和被关注者计数如何更改。
+
+我应该在应用程序的首页中显示所关注的帖子列表，但我还没有完全准备好执行此操作，因为用户还不能写博客文章。因此，我将推迟此更改，直到该功能就绪为止。
