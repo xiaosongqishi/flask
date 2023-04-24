@@ -1,6 +1,77 @@
-2023-04-02 12:24:18,180 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
-2023-04-02 12:25:00,864 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
-2023-04-07 10:22:29,018 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
-2023-04-07 10:22:41,577 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
-2023-04-07 11:10:19,420 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
-2023-04-07 11:24:32,690 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
+2023-04-24 21:58:23,004 ERROR: Exception on /index [GET] [in /home/ljs/.local/lib/python3.8/site-packages/flask/app.py:1744]
+Traceback (most recent call last):
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 2528, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1825, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1823, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1799, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask_login/utils.py", line 290, in decorated_view
+    return current_app.ensure_sync(func)(*args, **kwargs)
+  File "/home/ljs/桌面/DB-project-test/app/routes.py", line 31, in index
+    page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+KeyError: 'POSTS_PER_PAGE'
+2023-04-24 21:58:24,558 ERROR: Exception on /explore [GET] [in /home/ljs/.local/lib/python3.8/site-packages/flask/app.py:1744]
+Traceback (most recent call last):
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 2528, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1825, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1823, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1799, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask_login/utils.py", line 290, in decorated_view
+    return current_app.ensure_sync(func)(*args, **kwargs)
+  File "/home/ljs/桌面/DB-project-test/app/routes.py", line 46, in explore
+    page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+KeyError: 'POSTS_PER_PAGE'
+2023-04-24 21:58:25,242 ERROR: Exception on /user/1 [GET] [in /home/ljs/.local/lib/python3.8/site-packages/flask/app.py:1744]
+Traceback (most recent call last):
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 2528, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1825, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1823, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1799, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask_login/utils.py", line 290, in decorated_view
+    return current_app.ensure_sync(func)(*args, **kwargs)
+  File "/home/ljs/桌面/DB-project-test/app/routes.py", line 100, in user
+    page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+KeyError: 'POSTS_PER_PAGE'
+2023-04-24 21:58:48,141 ERROR: Exception on /index [GET] [in /home/ljs/.local/lib/python3.8/site-packages/flask/app.py:1744]
+Traceback (most recent call last):
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 2528, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1825, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1823, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1799, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask_login/utils.py", line 290, in decorated_view
+    return current_app.ensure_sync(func)(*args, **kwargs)
+  File "/home/ljs/桌面/DB-project-test/app/routes.py", line 31, in index
+    page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+KeyError: 'POSTS_PER_PAGE'
+2023-04-24 22:02:43,018 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
+2023-04-24 22:02:58,553 ERROR: Exception on /index [GET] [in /home/ljs/.local/lib/python3.8/site-packages/flask/app.py:1744]
+Traceback (most recent call last):
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 2528, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1825, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1823, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask/app.py", line 1799, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+  File "/home/ljs/.local/lib/python3.8/site-packages/flask_login/utils.py", line 290, in decorated_view
+    return current_app.ensure_sync(func)(*args, **kwargs)
+  File "/home/ljs/桌面/DB-project-test/app/routes.py", line 31, in index
+    page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+KeyError: 'POSTS_PER_PAGE'
+2023-04-24 22:04:30,051 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]

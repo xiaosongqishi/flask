@@ -56,6 +56,13 @@
   - [Combining Own and Followed Posts](#combining-own-and-followed-posts)
   - [Unit Testing the User Model](#unit-testing-the-user-model)
   - [Integrating Followers with the Application](#integrating-followers-with-the-application)
+- [Chapter9: Pagination](#chapter9-pagination)
+  - [Submission of Blog Posts](#submission-of-blog-posts)
+  - [Displaying Bolg Posts](#displaying-bolg-posts)
+  - [Making It Easier to Find Users to Follow](#making-it-easier-to-find-users-to-follow)
+  - [Pagination of Blog Posts](#pagination-of-blog-posts)
+  - [Page Navigation](#page-navigation)
+  - [Pagination in the User Profile Page](#pagination-in-the-user-profile-page)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -2266,3 +2273,392 @@ _app/templates/user.html_: Follow and unfollow links in user profile page.
 此时，您可以运行应用程序，创建一些用户并尝试关注和取消关注用户。您需要记住的唯一一件事是输入您想要关注或取消关注的用户的个人资料页面URL，因为目前没有查看用户列表的方法。例如，如果您想关注用户名为`susan`的用户，则需要在浏览器的地址栏中输入 _http://localhost:5000/user/susan_ 来访问该用户的个人资料页面。确保您检查当您发出关注或取消关注时，关注者和被关注者计数如何更改。
 
 我应该在应用程序的首页中显示所关注的帖子列表，但我还没有完全准备好执行此操作，因为用户还不能写博客文章。因此，我将推迟此更改，直到该功能就绪为止。
+
+# Chapter9: Pagination
+
+在第8章中，我对数据库做了一些必要的修改，以支持社交网络中流行的 "追随者 "范式。有了这些功能，我就准备去掉我在一开始就设置好的最后一块脚手架，即假的帖子。在这一章中，应用程序将开始接受来自用户的博客文章，并在主页和个人资料页面中以分页列表的形式提供这些文章。
+
+## Submission of Blog Posts
+
+让我们从简单的事情开始。主页需要有一个表单，用户可以在其中输入新的帖子。首先，我创建一个表单类：
+
+_app/forms.py_: Blog submission form.
+```python
+class PostForm(FlaskForm):
+    post = TextAreaField('Say something', validators=[
+        DataRequired(), Length(min=1, max=140)])
+    submit = SubmitField('Submit')
+```
+
+接下来，我可以把这个表单添加到应用程序的主页面的模板中：
+
+_app/templates/index.html_: Post submission form in index template
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>Hi, {{ current_user.username }}!</h1>
+    <form action="" method="post">
+        {{ form.hidden_tag() }}
+        <p>
+            {{ form.post.label }}<br>
+            {{ form.post(cols=32, rows=4) }}<br>
+            {% for error in form.post.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>{{ form.submit() }}</p>
+    </form>
+    {% for post in posts %}
+    <p>
+    {{ post.author.username }} says: <b>{{ post.body }}</b>
+    </p>
+    {% endfor %}
+{% endblock %}
+```
+
+这个模板中的变化与以前的表单处理方式类似。最后一部分是在视图函数中添加表单的创建和处理：
+
+_app/routes.py_: Post submission form in index view function.
+```python
+from app.forms import PostForm
+from app.models import Post
+
+@app.route('/', methods=['GET', 'POST'])
+@app.route('/index', methods=['GET', 'POST'])
+@login_required
+def index():
+    form = PostForm()
+    if form.validate_on_submit():
+        post = Post(body=form.post.data, author=current_user)
+        db.session.add(post)
+        db.session.commit()
+        flash('Your post is now live!')
+        return redirect(url_for('index'))
+    posts = [
+        {
+            'author': {'username': 'John'},
+            'body': 'Beautiful day in Portland!'
+        },
+        {
+            'author': {'username': 'Susan'},
+            'body': 'The Avengers movie was so cool!'
+        }
+    ]
+    return render_template("index.html", title='Home Page', form=form,
+                           posts=post
+```
+
+让我们逐一回顾一下这个视图函数中的变化：
+
+* 我现在导入了`Post`和`PostForm`类
+* 除了`GET`请求外，我还在与`index`视图函数相关的两个路由中接受`POST`请求，因为这个视图函数现在将接收表单数据。
+* 表单处理逻辑在数据库中插入一个新的`Post`记录。
+* 模板接收`form`对象作为一个额外的参数，这样它就可以渲染文本字段。
+
+在我继续之前，我想提一下与处理网络表单有关的一些重要事情。请注意在我处理完表单数据后，我是如何通过发出一个重定向到主页来结束请求的。我本可以很容易地跳过重定向，让函数继续向下进入模板渲染部分，因为这已经是索引视图函数了。
+
+那么，为什么要重定向呢？用重定向来响应由网络表单提交产生的`POST`请求是一种标准做法。这有助于减轻刷新命令在网络浏览器中的实现方式的烦恼。当你按下刷新键时，网络浏览器所做的就是重新发出最后的请求。如果一个带有表单提交的`POST`请求返回一个普通的响应，那么刷新将重新提交表单。因为这是出乎意料的，浏览器会要求用户确认重复提交，但大多数用户不会理解浏览器在问他们什么。但是如果一个`POST`请求得到了重定向的回答，浏览器现在被指示发送一个`GET`请求来抓取重定向中指示的页面，所以现在最后一个请求不再是`POST`请求了，刷新命令以一种更可预测的方式工作。
+
+这个简单的技巧被称为[帖子/重定向/获取模式](https://en.wikipedia.org/wiki/Post/Redirect/Get)。它可以避免在用户提交网络表单后无意中刷新页面时插入重复的帖子。
+
+## Displaying Bolg Posts
+
+如果你还记得，我创建了几个假的博客文章，在主页上显示了很长时间。这些假对象是在索引视图函数中明确创建的，是一个简单的Python列表：
+
+```
+    posts = [
+        { 
+            'author': {'username': 'John'}, 
+            'body': 'Beautiful day in Portland!' 
+        },
+        { 
+            'author': {'username': 'Susan'}, 
+            'body': 'The Avengers movie was so cool!' 
+        }
+    ]
+```
+
+但现在我在用户模型中有 followed_posts() 方法，该方法返回一个特定用户想看的帖子的查询。所以现在我可以用真实的帖子来代替假的帖子：
+
+_app/routes.py_: Display real posts in home page.
+
+```python
+@app.route('/', methods=['GET', 'POST'])
+@app.route('/index', methods=['GET', 'POST'])
+@login_required
+def index():
+    # ...
+    posts = current_user.followed_posts().all()
+    return render_template("index.html", title='Home Page', form=form,
+                           posts=posts)
+```
+
+`User`类的 `followed_posts` 方法返回一个 SQLAlchemy 查询对象，该对象被配置为从数据库中抓取用户感兴趣的帖子。对这个查询调用`all()`会触发其执行，返回值是一个包含所有结果的列表。因此，我最终得到的结构非常类似于到目前为止我一直在使用的带有假帖子的结构。它是如此接近，以至于模板甚至不需要改变。
+
+## Making It Easier to Find Users to Follow
+
+我相信你已经注意到了，目前的应用程序在让用户找到其他用户进行关注方面做得不是很好。事实上，实际上根本就没有办法看到其他用户在那里。我将通过一些简单的改变来解决这个问题。
+
+我将创建一个新的页面，我将称之为 `"Explore"` 页面。这个页面将像主页一样工作，但不是只显示被关注用户的帖子，而是显示所有用户的全球帖子流。这里是新的探索视图功能：
+
+_app/routes.py_: Explore view function.
+
+```python
+@app.route('/explore')
+@login_required
+def explore():
+    posts = Post.query.order_by(Post.timestamp.desc()).all()
+    return render_template('index.html', title='Explore', posts=posts)
+```
+
+你是否注意到这个视图函数中的一些奇怪之处？`render_template()`调用引用了index.html模板，我在应用程序的主页面中使用了它。由于这个页面将与主页面非常相似，我决定重新使用这个模板。但与主页面不同的是，在探索页面中，我不希望有一个写博文的表单，所以在这个视图函数中，我没有在模板调用中包含`form`参数。
+
+为了防止index.html模板在试图呈现一个不存在的Web表单时崩溃，我将添加一个条件，只有在表单被定义时才会呈现：
+
+_app/templates/index.html_: Make the blog post submission form optional.
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>Hi, {{ current_user.username }}!</h1>
+    {% if form %}
+    <form action="" method="post">
+        ...
+    </form>
+    {% endif %}
+    ...
+{% endblock %}
+```
+
+我还将在导航栏中添加一个指向这个新页面的链接：
+
+_app/templates/base.html_: Link to explore page in navigation bar.
+
+```        <a href="{{ url_for('explore') }}">Explore</a>```
+
+还记得我在第6章中介绍的_post.html子模板吗，它可以在用户资料页中呈现博客文章。这是一个从用户资料页模板中包含的小模板，而且是独立的，这样它也可以从其他模板中使用。我现在要对它做一个小小的改进，那就是把博文作者的用户名作为一个链接显示出来：
+
+_app/templates/_post.html_: Show link to author in blog posts.
+
+```html
+    <table>
+        <tr valign="top">
+            <td><img src="{{ post.author.avatar(36) }}"></td>
+            <td>
+                <a href="{{ url_for('user', username=post.author.username) }}">
+                    {{ post.author.username }}
+                </a>
+                says:<br>{{ post.body }}
+            </td>
+        </tr>
+    </table>
+```
+
+现在我可以使用这个子模板在主页和探索页中呈现博客文章：
+
+_app/templates/index.html_: Use blog post sub-template.
+
+```html
+    ...
+    {% for post in posts %}
+        {% include '_post.html' %}
+    {% endfor %}
+    ...
+```
+
+子模板希望有一个名为`post`的变量存在，而索引模板中的循环变量也是这样命名的，所以工作起来非常完美。
+
+通过这些小改动，应用程序的可用性得到了很大的改善。现在，用户可以访问探索页面，阅读未知用户的博文，并根据这些博文寻找新的用户进行关注，这可以通过简单地点击一个用户名来访问个人资料页面来完成。很神奇，对吗？
+
+在这一点上，我建议你再试一次这个应用程序，以便你体验这些最后的用户界面改进。
+
+## Pagination of Blog Posts
+
+该应用程序看起来比以往任何时候都好，但在主页上显示所有被关注的帖子，迟早会成为一个问题。如果一个用户有一千个被关注的帖子会怎样？或者一百万个？你可以想象，管理这么大的帖子列表将是非常缓慢和低效的。
+
+为了解决这个问题，我将对帖子列表进行分页。这意味着，最初我打算一次只显示有限数量的帖子，并包括链接来浏览整个帖子列表。Flask-SQLAlchemy通过`paginate()`查询方法原生支持分页。例如，如果我想获得用户的前20个被关注的帖子，我可以把终止查询的all()调用改为：
+
+```>>> user.followed_posts().paginate(page=1, per_page=20, error_out=False).items```
+
+`paginate`方法可以在Flask-SQLAlchemy的任何查询对象上调用。它需要三个参数：
+
+* 页数，从1开始
+* 每页的项目数
+* 一个错误标志。如果是`True`，当一个超出范围的页面被请求时，将自动返回给客户端一个404错误。如果是假的，超出范围的页面将返回一个空列表。
+
+`paginate`的返回值是一个`Pagination`对象。这个对象的 `items` 属性包含了请求页面中的项目列表。在`Pagination`对象中还有其他有用的东西，我将在后面讨论。
+
+现在让我们思考一下我如何在`index()`视图函数中实现分页。我可以先在应用程序中添加一个配置项，确定每页将显示多少个项目。
+
+_config.py_: Posts per page configuration.
+
+```
+class Config(object):
+    # ...
+    POSTS_PER_PAGE = 3
+```
+
+在配置文件中设置这些可以改变行为的应用范围的 "旋钮 "是个好主意，因为这样我就可以到一个地方去做调整。在最终的应用中，我当然会使用比每页三个项目更大的数字，但对于测试来说，用小数字工作是很有用的。
+
+接下来，我需要决定如何将页码纳入应用程序的URL。一个相当常见的方法是使用一个查询字符串参数来指定一个可选的页码，如果没有给出，则默认为第1页。下面是一些URL的例子，说明我将如何实现这一点：
+
+* 第1页，隐式：http://localhost:5000/index
+* 第1页，显式：http://localhost:5000/index?page=1
+* 第3页：http://localhost:5000/index?page=3
+
+为了访问查询字符串中的参数，我可以使用Flask的`request.args`对象。你已经在第5章中看到了这一点，在那里我从Flask-Login中实现了用户登录URL，可以包括`next`查询字符串参数。
+
+下面你可以看到我是如何给主页和探索视图功能添加分页的：
+
+_app/routes.py_: Followers association table
+
+```python
+@app.route('/', methods=['GET', 'POST'])
+@app.route('/index', methods=['GET', 'POST'])
+@login_required
+def index():
+    # ...
+    page = request.args.get('page', 1, type=int)
+    posts = current_user.followed_posts().paginate(
+        page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+    return render_template('index.html', title='Home', form=form,
+                           posts=posts.items)
+
+@app.route('/explore')
+@login_required
+def explore():
+    page = request.args.get('page', 1, type=int)
+    posts = Post.query.order_by(Post.timestamp.desc()).paginate(
+        page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+    return render_template("index.html", title='Explore', posts=posts.items)
+```
+
+有了这些变化，这两条路由就会根据`page`查询字符串参数或默认的1来确定要显示的页码，然后使用`paginate()`方法只检索所需的结果页面。决定页面大小的`POSTS_PER_PAGE`配置项是通过`app.config`对象访问的。
+
+请注意，这些变化是多么容易，而且每次变化时受影响的代码很少。我试图在不对其他部分的工作方式做任何假设的情况下编写应用程序的每一部分，这使我能够编写模块化和健壮的应用程序，这些应用程序更容易扩展和测试，而且不太可能失败或出现错误。
+
+来吧，试试分页支持。首先要确保你有三篇以上的博客文章。这在探索页中比较容易看到，它显示所有用户的帖子。你现在要看到的只是最近的三篇文章。如果你想看后面三篇，请在浏览器的地址栏中输入http://localhost:5000/explore?page=2。
+
+## Page Navigation
+
+下一个变化是在博文列表的底部添加链接，让用户可以浏览到下一页和/或上一页。还记得我提到`paginate()`调用的返回值是Flask-SQLAlchemy的Pagination类的一个对象吗？到目前为止，我已经使用了这个对象的 items 属性，它包含了为所选页面检索的项目列表。但是这个对象还有一些其他的属性，在建立分页链接时很有用：
+
+* `has_next`： 如果在当前页面之后至少还有一个页面，则为真
+* `has_prev`：如果在当前页面之前至少还有一个页面，则为真。
+* `next_num`: 下一页的页数
+* `prev_num`: 前一页的页码
+
+有了这四个元素，我就可以生成下一页和上一页的链接，并把它们传递给模板进行渲染：
+
+_app/routes.py_: Next and previous page links.
+
+```python
+@app.route('/', methods=['GET', 'POST'])
+@app.route('/index', methods=['GET', 'POST'])
+@login_required
+def index():
+    # ...
+    page = request.args.get('page', 1, type=int)
+    posts = current_user.followed_posts().paginate(
+        page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+    next_url = url_for('index', page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('index', page=posts.prev_num) \
+        if posts.has_prev else None
+    return render_template('index.html', title='Home', form=form,
+                           posts=posts.items, next_url=next_url,
+                           prev_url=prev_url)
+
+ @app.route('/explore')
+ @login_required
+ def explore():
+    page = request.args.get('page', 1, type=int)
+    posts = Post.query.order_by(Post.timestamp.desc()).paginate(
+        page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+    next_url = url_for('explore', page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('explore', page=posts.prev_num) \
+        if posts.has_prev else None
+    return render_template("index.html", title='Explore', posts=posts.items,
+                          next_url=next_url, prev_url=prev_url)
+```
+
+这两个视图函数中的`next_url`和`prev_url`将被设置为由`url_for()`返回的URL，只有在该方向有一个页面的情况下。如果当前页面位于帖子集合的某一端，那么分页对象的`has_next`或`has_prev`属性将为假，在这种情况下，该方向的链接将被设置为无。
+
+`url_for()`函数有一个有趣的地方，我以前没有讨论过，就是你可以向它添加任何关键字参数，如果这些参数的名字没有在URL中直接引用，那么Flask会把它们作为查询参数包含在URL中。
+
+分页链接被设置为index.html模板，所以现在让我们在页面上渲染它们，就在帖子列表的下面：
+
+_app/templates/index.html_: Render pagination links on the template.
+```html
+    ...
+    {% for post in posts %}
+        {% include '_post.html' %}
+    {% endfor %}
+    {% if prev_url %}
+    <a href="{{ prev_url }}">Newer posts</a>
+    {% endif %}
+    {% if next_url %}
+    <a href="{{ next_url }}">Older posts</a>
+    {% endif %}
+    ...
+```
+
+这一改动在索引和探索页面的帖子列表下面增加了两个链接。第一个链接被标记为 "较新的帖子"，它指向前一页（请记住，我显示的帖子是按最新的先排序的，所以第一页是有最新内容的那一页）。第二个链接被标记为 "较旧的帖子"，指向下一页的帖子。如果这两个链接中的任何一个是 "无"，那么它将通过一个条件从页面中省略。
+
+![ch09-pagination.png](/assets/img/ch09-pagination.png "ch09-pagination.png")
+
+## Pagination in the User Profile Page
+
+目前，对索引页的修改已经足够了。然而，在用户资料页中也有一个帖子列表，它只显示资料所有者的帖子。为了保持一致，应该改变用户资料页，使其与索引页的分页风格一致。
+
+我首先更新了用户档案查看功能，该功能中仍然有一个假的帖子对象列表。
+
+_app/routes.py_: Pagination in the user profile view function.
+
+```python
+@app.route('/user/<username>')
+@login_required
+def user(username):
+    user = User.query.filter_by(username=username).first_or_404()
+    page = request.args.get('page', 1, type=int)
+    posts = user.posts.order_by(Post.timestamp.desc()).paginate(
+        page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
+    next_url = url_for('user', username=user.username, page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('user', username=user.username, page=posts.prev_num) \
+        if posts.has_prev else None
+    form = EmptyForm()
+    return render_template('user.html', user=user, posts=posts.items,
+                           next_url=next_url, prev_url=prev_url, form=for
+```
+                          
+为了获得用户的帖子列表，我利用了user.post关系是SQLAlchemy已经设置好的查询，这是用户模型中db.relationship()定义的结果。我利用这个查询并添加一个order_by()子句，这样我就可以先得到最新的帖子，然后像我对索引和探索页面中的帖子那样进行分页处理。请注意，由url_for()函数生成的分页链接需要额外的用户名参数，因为它们是指向用户配置文件页面的，该页面的用户名是URL的一个动态组成部分。
+
+最后，对user.html模板的修改与我在索引页上的修改相同：
+
+_app/templates/user.html_: Pagination links in the user profile template.
+```html
+    ...
+    {% for post in posts %}
+        {% include '_post.html' %}
+    {% endfor %}
+    {% if prev_url %}
+    <a href="{{ prev_url }}">Newer posts</a>
+    {% endif %}
+    {% if next_url %}
+    <a href="{{ next_url }}">Older posts</a>
+    {% endif %}
+```
+
+在你完成了分页功能的实验后，你可以将POSTS_PER_PAGE配置项设置为一个更合理的值：
+
+_config.py_: Posts per page configuration.
+
+```python
+class Config(object):
+    # ...
+    POSTS_PER_PAGE = 25
+```
