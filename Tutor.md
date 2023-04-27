@@ -63,6 +63,15 @@
   - [Pagination of Blog Posts](#pagination-of-blog-posts)
   - [Page Navigation](#page-navigation)
   - [Pagination in the User Profile Page](#pagination-in-the-user-profile-page)
+- [Chapter10: Email Support](#chapter10-email-support)
+  - [Introduction to Flask-Mail](#introduction-to-flask-mail)
+  - [Flask-Mail Usage](#flask-mail-usage)
+  - [A Simple Email Framework](#a-simple-email-framework)
+  - [Requesting a Password Reset](#requesting-a-password-reset)
+  - [Password Reset Tokens](#password-reset-tokens)
+  - [Sending a Password Reset Email](#sending-a-password-reset-email)
+  - [Resetting a User Password](#resetting-a-user-password)
+  - [Asynchronous Emails](#asynchronous-emails)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -2662,3 +2671,387 @@ class Config(object):
     # ...
     POSTS_PER_PAGE = 25
 ```
+
+
+# Chapter10: Email Support
+
+## Introduction to Flask-Mail
+
+至于实际的电子邮件发送，Flask有一个流行的扩展，叫做Flask-Mail，可以使这个任务非常容易。一如既往，这个扩展是用pip安装的：
+
+```(venv) $ pip install flask-mail```
+
+密码重置链接中会有一个安全令牌。为了生成这些令牌，我将使用JSON Web令牌，它也有一个流行的Python包：
+
+```(venv) $ pip install pyjwt```
+
+Flask-Mail扩展是通过app.config对象配置的。还记得在第7章中我添加了电子邮件配置，以便在生产中出现错误时给自己发送电子邮件吗？当时我没有告诉你，但我对配置变量的选择是以Flask-Mail的要求为模型的，所以其实不需要任何额外的工作，配置变量已经在应用程序中了。
+
+像大多数Flask扩展一样，你需要在Flask应用程序创建后立即创建一个实例。在这种情况下，这是一个邮件类的对象：
+
+_app/__init__.py_: Flask-Mail instance.
+
+```python
+# ...
+from flask_mail import Mail
+
+app = Flask(__name__)
+# ...
+mail = Mail(app)
+```
+
+如果你打算测试电子邮件的发送，你有我在第7章中提到的同样的选择。如果你想使用一个模拟的电子邮件服务器，Python提供了一个非常方便的服务器，你可以在第二个终端用下面的命令启动：
+
+```(venv) $ python -m smtpd -n -c DebuggingServer localhost:8025```
+
+要为这个服务器进行配置，你需要设置两个环境变量：
+
+```
+(venv) $ export MAIL_SERVER=localhost
+(venv) $ export MAIL_PORT=8025
+```
+
+如果你喜欢真实地发送电子邮件，你需要使用一个真正的电子邮件服务器。如果你有一个，那么你只需要为它设置`MAIL_SERVER`、`MAIL_PORT`、`MAIL_USE_TLS`、`MAIL_USERNAME`和`MAIL_PASSWORD`环境变量。如果你想要一个快速的解决方案，你可以使用Gmail账户来发送电子邮件，设置如下：
+
+```
+(venv) $ export MAIL_SERVER=smtp.googlemail.com
+(venv) $ export MAIL_PORT=587
+(venv) $ export MAIL_USE_TLS=1
+(venv) $ export MAIL_USERNAME=<your-gmail-username>
+(venv) $ export MAIL_PASSWORD=<your-gmail-password>
+```
+
+如果你使用的是微软的Windows系统，你需要在上面的每一个`export`语句中用`set`代替`export`。
+
+记住，你的Gmail账户的安全功能可能会阻止应用程序通过它发送电子邮件，除非你明确允许 "不太安全的应用程序 "访问你的Gmail账户。你可以在[这里](https://support.google.com/accounts/answer/6010255?hl=en)阅读这方面的内容，如果你担心你的账户的安全性，你可以创建一个辅助账户，只为测试电子邮件而配置，或者你可以只暂时启用安全性较低的应用程序来运行你的测试，然后再恢复到更安全的默认值。
+
+如果你想使用一个真正的电子邮件服务器，但又不想让自己与Gmail的配置复杂化，SendGrid是一个不错的选择，它可以让你使用免费账户每天发送100封电子邮件。
+
+## Flask-Mail Usage
+
+为了学习Flask-Mail的工作原理，我将向你展示如何从Python shell中发送电子邮件。所以用flask shell启动Python，然后运行以下命令：
+
+```Shell
+>>> from flask_mail import Message
+>>> from app import mail
+>>> msg = Message('test subject', sender=app.config['ADMINS'][0],
+... recipients=['your-email@example.com'])
+>>> msg.body = 'text body'
+>>> msg.html = '<h1>HTML body</h1>'
+>>> mail.send(msg)
+```
+
+上面的代码片段将向你放在收件人参数中的电子邮件地址列表发送一封邮件。我把发件人设为第一个配置的管理员（我在第七章添加了ADMINS配置变量）。这封邮件将有纯文本和HTML版本，所以取决于你的电子邮件客户端是如何配置的，你可能会看到一个或另一个。
+
+所以正如你所看到的，这是很简单的。现在让我们把电子邮件集成到应用程序中。
+
+## A Simple Email Framework
+
+我将首先编写一个发送电子邮件的辅助函数，这基本上是上一节中shell练习的一个通用版本。我将把这个函数放在一个名为`app/email.py`的新模块中：
+
+_app/email.py_: Email sending wrapper function.
+```python
+from flask_mail import Message
+from app import mail
+
+def send_email(subject, sender, recipients, text_body, html_body):
+    msg = Message(subject, sender=sender, recipients=recipients)
+    msg.body = text_body
+    msg.html = html_body
+    mail.send(msg)
+```
+
+Flask-Mail支持一些我在这里没有利用的功能，比如抄送和密送列表。如果你对这些选项感兴趣，请务必查看Flask-Mail文档。
+
+## Requesting a Password Reset
+
+正如我上面提到的，我希望用户可以选择要求重置他们的密码。为此，我将在登录页面中添加一个链接：
+
+_app/templates/login.html_: Password reset link in login form.
+
+```html
+    <p>
+        Forgot Your Password?
+        <a href="{{ url_for('reset_password_request') }}">Click to Reset It</a>
+    </p>
+```
+
+当用户点击该链接时，将出现一个新的网络表单，要求用户提供电子邮件地址，以此来启动密码重置过程。这里是表单类：
+
+_app/forms.py_: Reset password request form.
+
+```python
+class ResetPasswordRequestForm(FlaskForm):
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    submit = SubmitField('Request Password Reset')
+```
+
+而这里是相应的HTML模板：
+
+_app/templates/reset_password_request.html_: Reset password request template.
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>Reset Password</h1>
+    <form action="" method="post">
+        {{ form.hidden_tag() }}
+        <p>
+            {{ form.email.label }}<br>
+            {{ form.email(size=64) }}<br>
+            {% for error in form.email.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>{{ form.submit() }}</p>
+    </form>
+{% endblock %}
+```
+
+我还需要一个视图函数来处理这个表单：
+
+_app/routes.py_: Reset password request view function.
+```python
+from app.forms import ResetPasswordRequestForm
+from app.email import send_password_reset_email
+
+@app.route('/reset_password_request', methods=['GET', 'POST'])
+def reset_password_request():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    form = ResetPasswordRequestForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(email=form.email.data).first()
+        if user:
+            send_password_reset_email(user)
+        flash('Check your email for the instructions to reset your password')
+        return redirect(url_for('login'))
+    return render_template('reset_password_request.html',
+                           title='Reset Password', form=form)
+```
+
+这个视图功能与其他处理表单的功能相当类似。我首先要确定用户没有登录。如果用户已经登录，那么使用密码重置功能就没有意义了，所以我重定向到索引页。
+
+当表单被提交并且有效时，我通过用户在表单中提供的电子邮件来查找用户。如果我找到了这个用户，我就发送一封密码重置邮件。`send_password_reset_email()`辅助函数完成了这个任务。我将在下面向你展示这个函数。
+
+邮件发送后，我闪现一条信息，引导用户寻找邮件以获得进一步的指示，然后重定向到登录页面。你可能会注意到，即使用户提供的电子邮件是未知的，也会显示闪现的信息。这是为了让客户无法使用这个表格来确定某个用户是否是会员。
+
+## Password Reset Tokens
+
+在我实现`send_password_reset_email()`函数之前，我需要有一种方法来生成一个密码请求链接。这将是通过电子邮件发送给用户的链接。当该链接被点击时，一个可以设置新密码的页面就会呈现给用户。这个计划的棘手之处在于，要确保只有有效的重置链接可以用来重置账户密码。
+
+这些链接将被配置一个令牌，这个令牌将在允许更改密码之前被验证，以证明要求发送电子邮件的用户能够访问账户上的电子邮件地址。对于这种类型的过程，一个非常流行的令牌标准是JSON Web令牌，或JWT。JWT的好处是，它们是自包含的。你可以在电子邮件中向用户发送一个令牌，当用户点击将令牌送回应用程序的链接时，它可以自行验证。
+
+JWTs是如何工作的？没有什么比一个快速的Python shell会话来了解它们更好了：
+
+```Shell
+>>> import jwt
+>>> token = jwt.encode({'a': 'b'}, 'my-secret', algorithm='HS256')
+>>> token
+'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhIjoiYiJ9.dvOo58OBDHiuSHD4uW88nfJik_sfUHq1mDi4G0'
+>>> jwt.decode(token, 'my-secret', algorithms=['HS256'])
+{'a': 'b'}
+
+```
+
+`{'a': 'b'}`字典是一个将被写入令牌的有效载荷的例子。为了使令牌安全，需要提供一个秘密密钥，用于创建一个加密签名。在这个例子中，我使用了字符串`'my-secret'`，但是在应用中我将使用配置中的`SECRET_KEY`。算法参数指定了令牌的生成方式。`HS256`算法是最广泛使用的算法。
+
+正如你所看到的，生成的令牌是一长串的字符。但不要以为这是一个加密的令牌。令牌的内容，包括有效载荷，可以被任何人轻易地解码（不相信我？复制上述令牌，然后在JWT调试器中输入它，就可以看到它的内容）。使得令牌安全的是，有效载荷被签名。如果有人试图伪造或篡改令牌中的有效载荷，那么签名就会失效，而要生成一个新的签名，则需要秘密密钥。当一个令牌被验证时，有效载荷的内容被解码并返回给调用者。如果令牌的签名被验证了，那么有效载荷就可以被信任为真实的。
+
+我将用于密码重置令牌的有效载荷的格式是`{'reset_password': user_id, 'exp': token_expiration}`。`exp`字段是JWTs的标准字段，如果存在，它表示令牌的到期时间。如果一个令牌有一个有效的签名，但它已经超过了它的过期时间戳，那么它也将被视为无效的。对于密码重置功能，我打算给这些令牌10分钟的寿命。
+
+由于这些令牌属于用户，我将把令牌生成和验证功能写成用户模型中的方法：
+
+_app/models.py_: Reset password token methods.
+```python
+from time import time
+import jwt
+from app import app
+
+class User(UserMixin, db.Model):
+    # ...
+
+    def get_reset_password_token(self, expires_in=600):
+        return jwt.encode(
+            {'reset_password': self.id, 'exp': time() + expires_in},
+            app.config['SECRET_KEY'], algorithm='HS256')
+
+    @staticmethod
+    def verify_reset_password_token(token):
+        try:
+            id = jwt.decode(token, app.config['SECRET_KEY'],
+                            algorithms=['HS256'])['reset_password']
+        except:
+            return
+        return User.query.get(id)
+```
+
+`get_reset_password_token()`函数返回一个JWT令牌的字符串，它是由`jwt.encode()`函数直接生成的。
+
+`verify_reset_password_token()`是一个静态方法，这意味着它可以直接从类中被调用。静态方法与类方法类似，唯一的区别是静态方法不接收类作为第一个参数。这个方法接收一个标记，并试图通过调用PyJWT的`jwt.decode()`函数对其进行解码。如果令牌不能被验证或过期，就会产生一个异常，在这种情况下，我会捕捉它以防止错误发生，然后向调用者返回`None`。如果令牌是有效的，那么来自令牌有效载荷的`reset_password`键的值就是用户的ID，所以我可以加载用户并返回它。
+
+## Sending a Password Reset Email
+
+`send_password_reset_email()`函数依赖于我上面写的`send_email()`函数来生成密码重置邮件。
+
+_app/email.py_: Send password reset email function.
+```python
+from flask import render_template
+from app import app
+
+# ...
+
+def send_password_reset_email(user):
+    token = user.get_reset_password_token()
+    send_email('[Microblog] Reset Your Password',
+               sender=app.config['ADMINS'][0],
+               recipients=[user.email],
+               text_body=render_template('email/reset_password.txt',
+                                         user=user, token=token),
+               html_body=render_template('email/reset_password.html',
+                                         user=user, token=token))
+```
+
+这个函数中有趣的部分是，电子邮件的文本和HTML内容是使用熟悉的`render_template()`函数从模板生成的。模板接收用户和令牌作为参数，这样就可以生成一个个性化的电子邮件信息。下面是重置密码邮件的文本模板：
+
+_app/templates/email/reset_password.txt_: Text for password reset email.
+
+```
+Dear {{ user.username }},
+
+To reset your password click on the following link:
+
+{{ url_for('reset_password', token=token, _external=True) }}
+
+If you have not requested a password reset simply ignore this message.
+
+Sincerely,
+
+The Microblog Team
+```
+
+这里是同一封电子邮件的较好的HTML版本：
+
+_app/templates/email/reset_password.html_: HTML for password reset email.
+
+```html
+<p>Dear {{ user.username }},</p>
+<p>
+    To reset your password
+    <a href="{{ url_for('reset_password', token=token, _external=True) }}">
+        click here
+    </a>.
+</p>
+<p>Alternatively, you can paste the following link in your browser's address bar:</p>
+<p>{{ url_for('reset_password', token=token, _external=True) }}</p>
+<p>If you have not requested a password reset simply ignore this message.</p>
+<p>Sincerely,</p>
+<p>The Microblog Team</p>
+```
+
+在这两个电子邮件模板的`url_for()`调用中引用的`reset_password`路由还不存在，这将在下一节添加。我在两个模板的`url_for()`调用中包含的`_external=True`参数也是新的。默认情况下，由`url_for()`生成的URL是相对URL，只包括URL的路径部分。这对于在网页中生成的链接来说通常是足够的，因为网络浏览器通过从地址栏中的URL中获取缺失的部分来完成URL的生成。然而，当通过电子邮件发送URL时，这种情况并不存在，所以需要使用完全合格的URLs。当`_external=True`作为一个参数被传递时，完整的URL会被生成，所以前面的例子会返回 _http://localhost:5000/user/susan_，或者当应用程序被部署在一个域名上时，会返回适当的URL。
+
+## Resetting a User Password
+
+当用户点击电子邮件链接时，与此功能相关的第二条路由被触发。这里是密码请求视图功能：
+
+_app/routes.py_: Password reset view function.
+
+```python
+from app.forms import ResetPasswordForm
+
+@app.route('/reset_password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    user = User.verify_reset_password_token(token)
+    if not user:
+        return redirect(url_for('index'))
+    form = ResetPasswordForm()
+    if form.validate_on_submit():
+        user.set_password(form.password.data)
+        db.session.commit()
+        flash('Your password has been reset.')
+        return redirect(url_for('login'))
+    return render_template('reset_password.html', form=form)
+```
+
+在这个视图函数中，我首先确保用户没有登录，然后我通过调用`User`类中的令牌验证方法来确定用户是谁。如果令牌有效，该方法将返回用户，如果无效，则返回`None`。如果令牌无效，我会重定向到主页。
+
+如果令牌是有效的，那么我将向用户展示第二个表单，其中要求提供新密码。这个表单的处理方式与之前的表单类似，作为一个有效表单提交的结果，我调用User的`set_password()`方法来改变密码，然后重定向到登录页面，用户现在可以登录。
+
+下面是ResetPasswordForm类：
+
+_app/forms.py_: Password reset form.
+
+```python
+class ResetPasswordForm(FlaskForm):
+    password = PasswordField('Password', validators=[DataRequired()])
+    password2 = PasswordField(
+        'Repeat Password', validators=[DataRequired(), EqualTo('password')])
+    submit = SubmitField('Request Password Reset')
+```
+
+而这里是相应的HTML模板：
+
+_app/templates/reset_password.html_: Password reset form template.
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+    <h1>Reset Your Password</h1>
+    <form action="" method="post">
+        {{ form.hidden_tag() }}
+        <p>
+            {{ form.password.label }}<br>
+            {{ form.password(size=32) }}<br>
+            {% for error in form.password.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>
+            {{ form.password2.label }}<br>
+            {{ form.password2(size=32) }}<br>
+            {% for error in form.password2.errors %}
+            <span style="color: red;">[{{ error }}]</span>
+            {% endfor %}
+        </p>
+        <p>{{ form.submit() }}</p>
+    </form>
+{% endblock %}
+```
+
+密码重置功能现在已经完成，所以请确保你尝试。
+
+## Asynchronous Emails
+
+如果你正在使用Python提供的模拟电子邮件服务器，你可能没有注意到这一点，但是发送电子邮件会大大降低应用程序的速度。发送邮件时需要发生的所有交互使任务变得很慢，通常需要几秒钟才能发出一封邮件，如果收件人的邮件服务器很慢，或者有多个收件人，可能会更多。
+
+我真正想要的是让`send_email()`函数成为异步的。那是什么意思？它意味着当这个函数被调用时，发送邮件的任务被安排在后台发生，释放`send_email()`立即返回，这样应用程序就可以在发送邮件的同时继续运行。
+
+Python支持运行异步任务，实际上不止一种方式。线程和多进程模块都可以做到这一点。为正在发送的邮件启动一个后台线程比启动一个全新的进程要节省资源，所以我打算采用这种方法：
+
+_app/email.py_: Send emails asynchronously.
+
+```python
+from threading import Thread
+# ...
+
+def send_async_email(app, msg):
+    with app.app_context():
+        mail.send(msg)
+
+
+def send_email(subject, sender, recipients, text_body, html_body):
+    msg = Message(subject, sender=sender, recipients=recipients)
+    msg.body = text_body
+    msg.html = html_body
+    Thread(target=send_async_email, args=(app, msg)).start()
+```
+
+`send_async_email`函数现在在一个后台线程中运行，在`send_email()`的最后一行通过`Thread`类调用。有了这个变化，电子邮件的发送将在线程中运行，而当这个过程完成后，线程将结束并清理自己。如果你已经配置了一个真正的电子邮件服务器，当你按下密码重置请求表的提交按钮时，你一定会注意到速度的提高。
+
+你可能以为只有`msg`参数会被发送到线程中，但正如你在代码中看到的，我也在发送应用程序实例。在使用线程时，Flask有一个重要的设计方面需要牢记。Flask使用上下文(_contexts_)来避免跨函数传递参数。我不打算在这方面做很多详细的介绍，但要知道有两种类型的上下文，应用上下文(_application context_)和请求上下文(_request context_)。在大多数情况下，这些上下文是由框架自动管理的，但当应用程序启动自定义线程时，这些线程的上下文可能需要手动创建。
+
+有很多扩展需要有应用上下文才能工作，因为这可以让它们找到Flask应用实例，而不需要把它作为一个参数传递。许多扩展之所以需要知道应用实例，是因为它们的配置存储在`app.config`对象中。这正是Flask-Mail的情况。`mail.send()`方法需要访问电子邮件服务器的配置值，而这只能通过知道应用程序是什么来实现。用`app.app_context()`调用创建的应用程序上下文使应用程序实例可以通过Flask的`current_app`变量访问。

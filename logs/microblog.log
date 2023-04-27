@@ -75,3 +75,4 @@ Traceback (most recent call last):
     page=page, per_page=app.config['POSTS_PER_PAGE'], error_out=False)
 KeyError: 'POSTS_PER_PAGE'
 2023-04-24 22:04:30,051 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:43]
+2023-04-27 15:23:26,792 INFO: Microblog startup [in /home/ljs/桌面/DB-project-test/app/__init__.py:45]
